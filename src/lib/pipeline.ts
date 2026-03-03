@@ -1,0 +1,277 @@
+import { supabase } from "./supabase";
+import { downloadFile, getFileMetadata } from "./google-drive";
+import { transcribeVideo, generateSRT, getSegmentsInRange } from "./whisper";
+import { extractClip, getVideoDuration, extractThumbnail } from "./ffmpeg";
+import { analyzeTranscriptForClips, generatePlatformCopy, generateThumbnailPrompt } from "./claude";
+import { generateThumbnail } from "./thumbnails";
+import { uploadClip, uploadThumbnail } from "./storage";
+import { notifyContentReady, notifyPipelineError } from "./notifications";
+import { MAX_VIDEO_SIZE_BYTES } from "./constants";
+import type { Video, Platform } from "./types";
+
+/**
+ * Full pipeline: process a single video from Google Drive.
+ * Stages: download → transcribe → analyze → clip → caption → generate copy → thumbnail → review
+ */
+export async function processVideo(video: Video): Promise<void> {
+  const videoId = video.id;
+  let isSpanish = false;
+
+  try {
+    // ----- Stage 1: Download (if not already downloaded) -----
+    let videoBuffer: Buffer;
+    let storagePath = video.storage_path;
+
+    if (video.status === "new" || video.status === "downloading") {
+      await updateStatus(videoId, "downloading");
+
+      // Check file size
+      const metadata = await getFileMetadata(video.google_drive_file_id);
+      const fileSize = parseInt(metadata.size as string, 10);
+      if (fileSize > MAX_VIDEO_SIZE_BYTES) {
+        throw new Error(`File too large: ${(fileSize / 1024 / 1024).toFixed(0)}MB exceeds ${MAX_VIDEO_SIZE_BYTES / 1024 / 1024}MB limit`);
+      }
+
+      videoBuffer = await downloadFile(video.google_drive_file_id);
+      storagePath = `raw/${videoId}/${video.filename}`;
+      const storageUrl = await uploadClip(storagePath, videoBuffer, video.mime_type);
+
+      // Get duration
+      const duration = await getVideoDuration(videoBuffer, video.filename).catch(() => null);
+
+      await supabase
+        .from("videos")
+        .update({
+          storage_path: storagePath,
+          duration_seconds: duration,
+          status: "downloaded",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+    } else {
+      // Already downloaded - fetch from storage
+      const { data } = supabase.storage
+        .from("clips")
+        .getPublicUrl(storagePath || "");
+      const res = await fetch(data.publicUrl);
+      videoBuffer = Buffer.from(await res.arrayBuffer());
+    }
+
+    // ----- Stage 2: Transcribe -----
+    if (video.status === "downloaded" || video.status === "downloading") {
+      await updateStatus(videoId, "transcribing");
+
+      const transcription = await transcribeVideo(videoBuffer, video.filename);
+
+      await supabase
+        .from("videos")
+        .update({
+          transcript: transcription.text,
+          transcript_segments: transcription.segments,
+          duration_seconds: transcription.duration || video.duration_seconds,
+          language: transcription.language,
+          status: "transcribed",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+
+      // Reload video data
+      video = {
+        ...video,
+        transcript: transcription.text,
+        transcript_segments: transcription.segments,
+        duration_seconds: transcription.duration || video.duration_seconds,
+        status: "transcribed",
+      };
+      // Track language detection for bilingual content
+      isSpanish = transcription.isSpanish;
+    }
+
+    // ----- Stage 3: Analyze + Clip + Generate -----
+    await updateStatus(videoId, "clipping");
+
+    const segments = video.transcript_segments || [];
+    const duration = video.duration_seconds || 0;
+
+    // Ask Claude to recommend clips
+    const recommendations = await analyzeTranscriptForClips(
+      video.transcript || "",
+      segments,
+      duration
+    );
+
+    if (recommendations.length === 0) {
+      // If no clips recommended, create a single content item from the full video
+      await createFullVideoContent(video, videoBuffer);
+      await updateStatus(videoId, "clipped");
+      return;
+    }
+
+    let contentCreated = 0;
+
+    for (const rec of recommendations) {
+      try {
+        // Get clip-specific captions
+        const clipSegments = getSegmentsInRange(segments, rec.start_time, rec.end_time);
+        const clipSRT = generateSRT(clipSegments);
+        const clipTranscript = clipSegments.map((s) => s.text).join(" ");
+
+        // Determine if this is a YouTube full-length or short-form clip
+        const clipDuration = rec.end_time - rec.start_time;
+        const isYouTube = rec.platforms.includes("youtube") && clipDuration > 60;
+
+        // Extract clip with FFmpeg
+        const clipResult = await extractClip(videoBuffer, video.filename, {
+          startTime: rec.start_time,
+          endTime: rec.end_time,
+          aspectRatio: isYouTube ? "16:9" : "9:16",
+          srtContent: isYouTube ? undefined : clipSRT, // Burn captions for short-form only
+          maxDuration: isYouTube ? 480 : 60, // 8min YouTube, 60s others
+        });
+
+        // Upload clip to storage
+        const clipStoragePath = `clips/${videoId}/${Date.now()}_${rec.suggested_title.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40)}.mp4`;
+        const clipUrl = await uploadClip(clipStoragePath, clipResult.buffer, "video/mp4");
+
+        // Save clip record
+        const { data: clipRecord } = await supabase
+          .from("clips")
+          .insert({
+            video_id: videoId,
+            storage_path: clipStoragePath,
+            start_time: rec.start_time,
+            end_time: rec.end_time,
+            duration_seconds: clipResult.duration,
+            aspect_ratio: clipResult.aspectRatio,
+            srt_captions: clipSRT,
+            ai_score: rec.score,
+            ai_reasoning: rec.reasoning,
+          })
+          .select()
+          .single();
+
+        // Generate platform copy (bilingual if video is in Spanish)
+        const copy = await generatePlatformCopy(
+          clipTranscript,
+          rec.suggested_title,
+          rec.platforms,
+          isSpanish
+        );
+
+        // Generate thumbnail for YouTube clips
+        let thumbnailUrl: string | null = null;
+        if (rec.platforms.includes("youtube")) {
+          try {
+            const thumbPrompt = await generateThumbnailPrompt(
+              rec.suggested_title,
+              clipTranscript
+            );
+            const thumbBuffer = await generateThumbnail(thumbPrompt);
+            const thumbPath = `thumbnails/${videoId}/${Date.now()}.png`;
+            thumbnailUrl = await uploadThumbnail(thumbPath, thumbBuffer);
+          } catch (err) {
+            // Thumbnail gen failure is non-critical - fall back to video frame
+            console.error("Thumbnail generation failed:", err);
+            try {
+              const frameBuffer = await extractThumbnail(
+                videoBuffer,
+                video.filename,
+                rec.start_time + (clipResult.duration / 2)
+              );
+              const thumbPath = `thumbnails/${videoId}/${Date.now()}_frame.png`;
+              thumbnailUrl = await uploadThumbnail(thumbPath, frameBuffer);
+            } catch {
+              // Skip thumbnail entirely
+            }
+          }
+        }
+
+        // Create content record (status: review so Jose sees it)
+        await supabase.from("content").insert({
+          clip_id: clipRecord?.id || null,
+          type: "video_clip",
+          status: "review",
+          title: rec.suggested_title,
+          description: rec.reasoning,
+          youtube_title: copy.youtube_title,
+          youtube_description: copy.youtube_description,
+          youtube_tags: copy.youtube_tags,
+          facebook_text: copy.facebook_text,
+          instagram_caption: copy.instagram_caption,
+          tiktok_caption: copy.tiktok_caption,
+          media_url: clipUrl,
+          thumbnail_url: thumbnailUrl,
+          platforms: rec.platforms,
+        });
+
+        contentCreated++;
+      } catch (clipErr) {
+        console.error(`Failed to process clip "${rec.suggested_title}":`, clipErr);
+        // Continue with other clips
+      }
+    }
+
+    await updateStatus(videoId, "clipped");
+
+    // Notify Jose that content is ready for review
+    if (contentCreated > 0) {
+      await notifyContentReady(contentCreated).catch(console.error);
+    }
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : "Unknown pipeline error";
+    console.error(`Pipeline failed for video ${videoId}:`, errorMsg);
+
+    await supabase
+      .from("videos")
+      .update({
+        status: "failed",
+        error_message: errorMsg,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", videoId);
+
+    await notifyPipelineError(video.filename, errorMsg).catch(console.error);
+    throw err;
+  }
+}
+
+/**
+ * Create a content item from the full video (no clip extraction).
+ * Used when Claude doesn't find specific clip-worthy moments,
+ * or the video is short enough to post as-is.
+ */
+async function createFullVideoContent(video: Video, videoBuffer: Buffer) {
+  const storagePath = video.storage_path || `raw/${video.id}/${video.filename}`;
+  const { data: urlData } = supabase.storage.from("clips").getPublicUrl(storagePath);
+
+  const transcript = video.transcript || "";
+  const title = video.filename.replace(/\.[^.]+$/, "");
+
+  const copy = await generatePlatformCopy(
+    transcript.slice(0, 1000),
+    title,
+    ["youtube"]
+  );
+
+  await supabase.from("content").insert({
+    type: "video_clip",
+    status: "review",
+    title,
+    description: "Full video - no specific clips extracted",
+    youtube_title: copy.youtube_title,
+    youtube_description: copy.youtube_description,
+    youtube_tags: copy.youtube_tags,
+    facebook_text: copy.facebook_text,
+    instagram_caption: copy.instagram_caption,
+    tiktok_caption: copy.tiktok_caption,
+    media_url: urlData.publicUrl,
+    platforms: ["youtube"],
+  });
+}
+
+async function updateStatus(videoId: string, status: Video["status"]) {
+  await supabase
+    .from("videos")
+    .update({ status, updated_at: new Date().toISOString() })
+    .eq("id", videoId);
+}
