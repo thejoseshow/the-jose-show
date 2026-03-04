@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { publishContent } from "@/lib/publish";
 
 export const maxDuration = 300;
 
@@ -31,18 +32,11 @@ export async function GET(request: NextRequest) {
   }
 
   let published = 0;
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || "http://localhost:3000";
 
   for (const content of scheduledContent) {
     try {
-      // Trigger publish via internal API
-      const res = await fetch(`${siteUrl}/api/content/${content.id}/publish`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platforms: content.platforms }),
-      });
-
-      if (res.ok) published++;
+      await publishContent(content.id, content.platforms);
+      published++;
     } catch (err) {
       console.error(`Failed to publish ${content.id}:`, err);
     }

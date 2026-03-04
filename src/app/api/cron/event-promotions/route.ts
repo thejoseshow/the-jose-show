@@ -2,7 +2,16 @@ import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { generateEventPromo } from "@/lib/claude";
-import type { Event, PromoScheduleItem } from "@/lib/types";
+import { getNextInstance } from "@/lib/recurrence";
+import { getTemplateBySlug } from "@/lib/templates";
+import type { Event, EventType, PromoScheduleItem } from "@/lib/types";
+
+// Map event types to template slugs for creative direction
+const EVENT_TYPE_TEMPLATE_MAP: Partial<Record<EventType, string>> = {
+  bachata_class: "bachata-tip",
+  dr_tour: "dr-tour-promo",
+  dj_gig: "dj-set-highlight",
+};
 
 // GET /api/cron/event-promotions - Auto-generate promo posts for upcoming events
 export async function GET(request: NextRequest) {
@@ -13,27 +22,60 @@ export async function GET(request: NextRequest) {
   const now = new Date();
   const thirtyDaysOut = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
-  // Find upcoming events within 30 days
-  const { data: events, error } = await supabase
+  // Find non-recurring upcoming events within 30 days
+  const { data: upcomingEvents } = await supabase
     .from("events")
     .select("*")
+    .eq("is_recurring", false)
     .gte("start_date", now.toISOString())
     .lte("start_date", thirtyDaysOut.toISOString())
     .order("start_date", { ascending: true });
 
-  if (error || !events?.length) {
+  // Find all recurring events (their start_date may be in the past)
+  const { data: recurringEvents } = await supabase
+    .from("events")
+    .select("*")
+    .eq("is_recurring", true);
+
+  // Build unified list of events to process with their effective date
+  const eventsToProcess: Array<{ event: Event; eventDate: Date }> = [];
+
+  for (const row of upcomingEvents || []) {
+    eventsToProcess.push({ event: row as Event, eventDate: new Date(row.start_date) });
+  }
+
+  for (const row of recurringEvents || []) {
+    const event = row as Event;
+    const nextDate = getNextInstance(event, now);
+    if (nextDate && nextDate <= thirtyDaysOut) {
+      eventsToProcess.push({ event, eventDate: nextDate });
+    }
+  }
+
+  if (!eventsToProcess.length) {
     return NextResponse.json({ success: true, generated: 0, message: "No upcoming events" });
   }
 
   let generated = 0;
 
-  for (const eventRow of events) {
-    const event = eventRow as Event;
-    const eventDate = new Date(event.start_date);
+  // Pre-fetch templates for event types
+  const templateCache = new Map<string, { prompt_hint: string; hashtags: string[]; id: string }>();
+  for (const slug of Object.values(EVENT_TYPE_TEMPLATE_MAP)) {
+    if (slug && !templateCache.has(slug)) {
+      const t = await getTemplateBySlug(slug);
+      if (t) templateCache.set(slug, { prompt_hint: t.prompt_hint, hashtags: t.hashtags, id: t.id });
+    }
+  }
+
+  for (const { event, eventDate } of eventsToProcess) {
     const daysUntil = Math.ceil((eventDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
 
+    // Look up template for this event type
+    const templateSlug = EVENT_TYPE_TEMPLATE_MAP[event.type];
+    const matchedTemplate = templateSlug ? templateCache.get(templateSlug) : undefined;
+
     // Default promo schedule if none set
-    const promoSchedule: PromoScheduleItem[] = event.promo_schedule || [
+    let promoSchedule: PromoScheduleItem[] = event.promo_schedule || [
       { days_before: 14, type: "announcement", generated: false },
       { days_before: 7, type: "countdown", generated: false },
       { days_before: 3, type: "countdown", generated: false },
@@ -41,10 +83,20 @@ export async function GET(request: NextRequest) {
       { days_before: -1, type: "recap", generated: false },
     ];
 
+    // For recurring events: if all promos are generated and next instance is in the future,
+    // reset flags for a fresh cycle
+    if (event.is_recurring && promoSchedule.every((p) => p.generated)) {
+      promoSchedule = promoSchedule.map((p) => ({
+        ...p,
+        generated: false,
+        content_id: undefined,
+      }));
+    }
+
     for (const promo of promoSchedule) {
       // Check if this promo should fire today
       if (promo.generated) continue;
-      if (Math.abs(daysUntil - promo.days_before) > 0) continue;
+      if (Math.abs(daysUntil - promo.days_before) > 1) continue;
 
       try {
         const copy = await generateEventPromo(
@@ -60,7 +112,8 @@ export async function GET(request: NextRequest) {
           event.location,
           event.description,
           promo.type,
-          daysUntil
+          daysUntil,
+          matchedTemplate ? { promptHint: matchedTemplate.prompt_hint, hashtags: matchedTemplate.hashtags } : undefined
         );
 
         // Create content item for review
@@ -76,6 +129,7 @@ export async function GET(request: NextRequest) {
             instagram_caption: copy.instagram_caption,
             tiktok_caption: copy.tiktok_caption,
             platforms: ["facebook", "instagram"],
+            template_id: matchedTemplate?.id || null,
           })
           .select()
           .single();

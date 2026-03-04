@@ -15,13 +15,25 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus } from "lucide-react";
+import { Switch } from "@/components/ui/switch";
+import { Plus, Pencil, Trash2 } from "lucide-react";
+import { RECURRENCE_PRESETS, buildMonthlyByDay } from "@/lib/recurrence";
 import type { Event, EventType } from "@/lib/types";
 
 const EVENT_TYPE_LABELS: Record<EventType, string> = {
@@ -37,6 +49,9 @@ export default function EventsPage() {
   const [events, setEvents] = useState<Event[]>([]);
   const [loading, setLoading] = useState(true);
   const [showCreate, setShowCreate] = useState(false);
+  const [editingEvent, setEditingEvent] = useState<Event | null>(null);
+  const [deletingEvent, setDeletingEvent] = useState<Event | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -47,6 +62,18 @@ export default function EventsPage() {
     }
     load();
   }, []);
+
+  async function handleDelete() {
+    if (!deletingEvent) return;
+    setDeleting(true);
+    const res = await fetch(`/api/events/${deletingEvent.id}`, { method: "DELETE" });
+    const data = await res.json();
+    if (data.success) {
+      setEvents((prev) => prev.filter((e) => e.id !== deletingEvent.id));
+    }
+    setDeleting(false);
+    setDeletingEvent(null);
+  }
 
   return (
     <div className="space-y-6">
@@ -102,10 +129,28 @@ export default function EventsPage() {
                       {event.location && ` at ${event.location}`}
                     </p>
                   </div>
-                  <div className="text-right text-sm text-muted-foreground">
-                    {event.promo_schedule
-                      ? `${event.promo_schedule.filter((p) => p.generated).length}/${event.promo_schedule.length} promos`
-                      : "No promos"}
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm text-muted-foreground mr-2">
+                      {event.promo_schedule
+                        ? `${event.promo_schedule.filter((p) => p.generated).length}/${event.promo_schedule.length} promos`
+                        : "No promos"}
+                    </span>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8"
+                      onClick={() => setEditingEvent(event)}
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-8 w-8 text-destructive hover:text-destructive"
+                      onClick={() => setDeletingEvent(event)}
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </Button>
                   </div>
                 </div>
               </CardContent>
@@ -114,59 +159,117 @@ export default function EventsPage() {
         </div>
       )}
 
+      {/* Create Dialog */}
       <Dialog open={showCreate} onOpenChange={setShowCreate}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Create Event</DialogTitle>
           </DialogHeader>
-          <CreateEventForm
+          <EventForm
             onClose={() => setShowCreate(false)}
-            onCreated={(e) => setEvents((prev) => [e, ...prev])}
+            onSaved={(e) => setEvents((prev) => [e, ...prev])}
           />
         </DialogContent>
       </Dialog>
+
+      {/* Edit Dialog */}
+      <Dialog open={!!editingEvent} onOpenChange={(open) => !open && setEditingEvent(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit Event</DialogTitle>
+          </DialogHeader>
+          {editingEvent && (
+            <EventForm
+              initialData={editingEvent}
+              onClose={() => setEditingEvent(null)}
+              onSaved={(updated) => {
+                setEvents((prev) => prev.map((e) => (e.id === updated.id ? updated : e)));
+                setEditingEvent(null);
+              }}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Confirmation */}
+      <AlertDialog open={!!deletingEvent} onOpenChange={(open) => !open && setDeletingEvent(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete event?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete &ldquo;{deletingEvent?.name}&rdquo; and cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={deleting}
+              className="bg-destructive text-white hover:bg-destructive/90"
+            >
+              {deleting ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
 
-function CreateEventForm({
+function EventForm({
+  initialData,
   onClose,
-  onCreated,
+  onSaved,
 }: {
+  initialData?: Event;
   onClose: () => void;
-  onCreated: (event: Event) => void;
+  onSaved: (event: Event) => void;
 }) {
-  const [name, setName] = useState("");
-  const [type, setType] = useState<EventType>("bachata_class");
-  const [location, setLocation] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [description, setDescription] = useState("");
+  const isEdit = !!initialData;
+  const [name, setName] = useState(initialData?.name || "");
+  const [type, setType] = useState<EventType>(initialData?.type || "bachata_class");
+  const [location, setLocation] = useState(initialData?.location || "");
+  const [startDate, setStartDate] = useState(
+    initialData ? new Date(initialData.start_date).toISOString().slice(0, 16) : ""
+  );
+  const [description, setDescription] = useState(initialData?.description || "");
+  const [isRecurring, setIsRecurring] = useState(initialData?.is_recurring || false);
+  const [recurrenceRule, setRecurrenceRule] = useState(initialData?.recurrence_rule || "");
   const [saving, setSaving] = useState(false);
 
-  async function handleCreate(e: React.FormEvent) {
+  async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const res = await fetch("/api/events", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name,
-        type,
-        location,
-        start_date: new Date(startDate).toISOString(),
-        description,
-      }),
-    });
+
+    const payload = {
+      name,
+      type,
+      location,
+      start_date: new Date(startDate).toISOString(),
+      description,
+      is_recurring: isRecurring,
+      recurrence_rule: isRecurring ? recurrenceRule : null,
+    };
+
+    const res = await fetch(
+      isEdit ? `/api/events/${initialData.id}` : "/api/events",
+      {
+        method: isEdit ? "PATCH" : "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+
     const data = await res.json();
     if (data.success) {
-      onCreated(data.data);
+      onSaved(data.data);
       onClose();
     }
     setSaving(false);
   }
 
   return (
-    <form onSubmit={handleCreate} className="space-y-4">
+    <form onSubmit={handleSubmit} className="space-y-4">
       <div className="space-y-2">
         <Label>Event Name</Label>
         <Input
@@ -205,6 +308,43 @@ function CreateEventForm({
           onChange={(e) => setStartDate(e.target.value)}
         />
       </div>
+      <div className="flex items-center justify-between">
+        <Label htmlFor="recurring-toggle">Recurring Event</Label>
+        <Switch
+          id="recurring-toggle"
+          checked={isRecurring}
+          onCheckedChange={(checked) => {
+            setIsRecurring(checked);
+            if (!checked) setRecurrenceRule("");
+          }}
+        />
+      </div>
+      {isRecurring && (
+        <div className="space-y-2">
+          <Label>Recurrence Pattern</Label>
+          <Select
+            value={recurrenceRule}
+            onValueChange={(v) => {
+              if (v === "__MONTHLY_BY_DAY__" && startDate) {
+                setRecurrenceRule(buildMonthlyByDay(new Date(startDate)));
+              } else {
+                setRecurrenceRule(v);
+              }
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Select pattern" />
+            </SelectTrigger>
+            <SelectContent>
+              {RECURRENCE_PRESETS.map((p) => (
+                <SelectItem key={p.value} value={p.value}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
       <div className="space-y-2">
         <Label>Description</Label>
         <Textarea
@@ -223,7 +363,7 @@ function CreateEventForm({
           disabled={!name || !startDate || saving}
           className="bg-red-600 hover:bg-red-700"
         >
-          {saving ? "Creating..." : "Create Event"}
+          {saving ? (isEdit ? "Saving..." : "Creating...") : isEdit ? "Save Changes" : "Create Event"}
         </Button>
       </div>
     </form>

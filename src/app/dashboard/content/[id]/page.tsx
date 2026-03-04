@@ -22,8 +22,15 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
-import { ArrowLeft, Loader2, Trash2 } from "lucide-react";
-import type { Content, Platform } from "@/lib/types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { ArrowLeft, Loader2, Trash2, Wand2 } from "lucide-react";
+import type { Content, ContentTemplate, Platform } from "@/lib/types";
 
 export default function ContentDetailPage({
   params,
@@ -47,11 +54,18 @@ export default function ContentDetailPage({
   const [tkCaption, setTkCaption] = useState("");
   const [platforms, setPlatforms] = useState<Platform[]>([]);
   const [scheduledAt, setScheduledAt] = useState("");
+  const [templates, setTemplates] = useState<ContentTemplate[]>([]);
+  const [selectedTemplateId, setSelectedTemplateId] = useState("");
+  const [additionalContext, setAdditionalContext] = useState("");
+  const [generating, setGenerating] = useState(false);
 
   useEffect(() => {
     async function load() {
-      const res = await fetch(`/api/content/${id}`);
-      const data = await res.json();
+      const [contentRes, templatesRes] = await Promise.all([
+        fetch(`/api/content/${id}`),
+        fetch("/api/templates?active=true"),
+      ]);
+      const data = await contentRes.json();
       if (data.success && data.data) {
         const c = data.data as Content;
         setContent(c);
@@ -65,7 +79,10 @@ export default function ContentDetailPage({
         setTkCaption(c.tiktok_caption || "");
         setPlatforms(c.platforms || []);
         setScheduledAt(c.scheduled_at ? c.scheduled_at.slice(0, 16) : "");
+        if (c.template_id) setSelectedTemplateId(c.template_id);
       }
+      const tData = await templatesRes.json();
+      if (tData.success) setTemplates(tData.data || []);
       setLoading(false);
     }
     load();
@@ -126,6 +143,37 @@ export default function ContentDetailPage({
     await fetch(`/api/content/${id}`, { method: "DELETE" });
     toast.success("Content deleted");
     router.push("/dashboard/content");
+  }
+
+  async function handleGenerateCopy() {
+    if (!selectedTemplateId) return;
+    setGenerating(true);
+    try {
+      const res = await fetch(`/api/content/${id}/generate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          template_id: selectedTemplateId,
+          additional_context: additionalContext || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        const c = data.data as Content;
+        setYtTitle(c.youtube_title || "");
+        setYtDescription(c.youtube_description || "");
+        setYtTags(c.youtube_tags?.join(", ") || "");
+        setFbText(c.facebook_text || "");
+        setIgCaption(c.instagram_caption || "");
+        setTkCaption(c.tiktok_caption || "");
+        toast.success("Copy generated from template");
+      } else {
+        toast.error("Generation failed", { description: data.error });
+      }
+    } catch {
+      toast.error("Failed to generate copy");
+    }
+    setGenerating(false);
   }
 
   if (loading) {
@@ -281,6 +329,51 @@ export default function ContentDetailPage({
               disabled={isPublished}
             />
           </div>
+
+          {/* Apply Template */}
+          <Card>
+            <CardContent className="py-4 space-y-3">
+              <Label className="text-sm font-medium">Apply Template</Label>
+              <Select
+                value={selectedTemplateId}
+                onValueChange={setSelectedTemplateId}
+                disabled={isPublished}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select template..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {templates.map((t) => (
+                    <SelectItem key={t.id} value={t.id}>{t.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Textarea
+                placeholder="Additional context (optional)..."
+                value={additionalContext}
+                onChange={(e) => setAdditionalContext(e.target.value)}
+                disabled={isPublished}
+                rows={2}
+              />
+              <Button
+                onClick={handleGenerateCopy}
+                disabled={!selectedTemplateId || isPublished || generating}
+                className="w-full bg-purple-600 hover:bg-purple-700"
+              >
+                {generating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  <>
+                    <Wand2 className="mr-2 h-4 w-4" />
+                    Generate Copy
+                  </>
+                )}
+              </Button>
+            </CardContent>
+          </Card>
         </div>
 
         {/* Per-Platform Copy */}

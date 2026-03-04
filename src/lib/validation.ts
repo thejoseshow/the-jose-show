@@ -61,6 +61,22 @@ export const createEventSchema = z.object({
 
 export const updateEventSchema = createEventSchema.partial();
 
+export const createTemplateSchema = z.object({
+  slug: z.string().min(1).max(100).regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, "Slug must be lowercase alphanumeric with hyphens"),
+  name: z.string().min(1).max(200),
+  description: z.string().max(2000).nullable().optional(),
+  prefix: z.string().min(1).max(200),
+  default_platforms: z.array(platformEnum).default([]),
+  hashtags: z.array(z.string()).default([]),
+  prompt_hint: z.string().max(2000).default(""),
+  is_recurring: z.boolean().default(false),
+  frequency: z.enum(["weekly", "biweekly", "monthly"]).nullable().optional(),
+  preferred_day: z.number().int().min(0).max(6).nullable().optional(),
+  is_active: z.boolean().default(true),
+});
+
+export const updateTemplateSchema = createTemplateSchema.partial();
+
 export const clipSchema = z.object({
   video_id: z.string().uuid(),
   start_time: z.number().min(0),

@@ -86,7 +86,9 @@ export async function getVideoAnalytics(videoId: string) {
     views: parseInt(video.statistics?.viewCount || "0", 10),
     likes: parseInt(video.statistics?.likeCount || "0", 10),
     comments: parseInt(video.statistics?.commentCount || "0", 10),
-    shares: 0, // Not available via basic stats
+    // YouTube Data API v3 (videos.list) doesn't expose share counts.
+    // Would require YouTube Analytics API with yt-analytics.readonly scope.
+    shares: 0,
   };
 }
 

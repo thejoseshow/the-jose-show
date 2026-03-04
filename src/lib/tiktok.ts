@@ -166,13 +166,47 @@ export async function refreshTikTokToken(): Promise<void> {
 }
 
 /**
+ * Get video insights from TikTok Video Query API v2.
+ */
+export async function getTikTokVideoInsights(
+  publishId: string
+): Promise<{ views: number; likes: number; comments: number; shares: number } | null> {
+  const token = await getTikTokToken();
+
+  const res = await fetch(`${TIKTOK_API}/video/query/`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      filters: {
+        video_ids: [publishId],
+      },
+      fields: ["id", "like_count", "comment_count", "share_count", "view_count"],
+    }),
+  });
+
+  const data = await res.json();
+  const video = data.data?.videos?.[0];
+  if (!video) return null;
+
+  return {
+    views: video.view_count || 0,
+    likes: video.like_count || 0,
+    comments: video.comment_count || 0,
+    shares: video.share_count || 0,
+  };
+}
+
+/**
  * Get TikTok OAuth URL to start authentication.
  */
 export function getTikTokAuthUrl(): string {
   const params = new URLSearchParams({
     client_key: process.env.TIKTOK_CLIENT_KEY || "",
     redirect_uri: `${process.env.NEXT_PUBLIC_SITE_URL}/api/auth/tiktok`,
-    scope: "user.info.basic,video.publish,video.upload",
+    scope: "user.info.basic,video.publish,video.upload,video.list",
     response_type: "code",
     state: "tjs_tiktok_auth",
   });

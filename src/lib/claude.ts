@@ -184,7 +184,8 @@ export async function generateEventPromo(
   eventLocation: string | null,
   description: string | null,
   promoType: "announcement" | "countdown" | "reminder" | "recap",
-  daysUntil: number
+  daysUntil: number,
+  templateContext?: { promptHint: string; hashtags: string[] }
 ): Promise<PlatformCopy> {
   const client = getClient();
 
@@ -209,6 +210,7 @@ ${promoType === "countdown" ? `This is a countdown post - ${daysUntil} days to g
 ${promoType === "reminder" ? "This is a last-minute reminder. Create urgency!" : ""}
 ${promoType === "recap" ? "This is a post-event recap. Celebrate the success and tease the next one!" : ""}
 ${promoType === "announcement" ? "This is the initial announcement. Generate hype!" : ""}
+${templateContext ? `\nCREATIVE DIRECTION: ${templateContext.promptHint}\nHASHTAGS TO INCLUDE: ${templateContext.hashtags.join(" ")}` : ""}
 
 Respond ONLY with JSON:
 {
@@ -238,6 +240,74 @@ Respond ONLY with JSON:
     };
   } catch {
     return getDefaultCopy(eventName, ["facebook", "instagram", "tiktok"]);
+  }
+}
+
+/**
+ * Generate platform-specific copy using a content template's creative direction.
+ */
+export async function generateTemplatedCopy(
+  title: string,
+  platforms: Platform[],
+  templateContext: { promptHint: string; hashtags: string[]; prefix: string; description: string | null },
+  additionalContext?: string,
+  isSpanish = false
+): Promise<PlatformCopy> {
+  const client = getClient();
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    system: BRAND_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: `Generate social media copy for this content piece.
+
+CONTENT TITLE: ${title}
+TEMPLATE SERIES: ${templateContext.prefix}
+TEMPLATE DESCRIPTION: ${templateContext.description || "N/A"}
+CREATIVE DIRECTION: ${templateContext.promptHint}
+TARGET PLATFORMS: ${platforms.join(", ")}
+${additionalContext ? `ADDITIONAL CONTEXT: ${additionalContext}` : ""}
+LANGUAGE: ${isSpanish ? "Write captions in Spanish first, then add an English translation or mix. Make hashtags bilingual." : "Write in English. Sprinkle in Dominican Spanish phrases naturally as Jose would."}
+
+HASHTAGS TO INCLUDE: ${templateContext.hashtags.join(" ")}
+
+Generate copy for EACH platform. Respond ONLY with JSON:
+{
+  "youtube_title": "catchy title under ${PLATFORM_LIMITS.youtube.titleMaxLength} chars (null if not targeting YouTube)",
+  "youtube_description": "detailed description with links to socials (null if not targeting YouTube)",
+  "youtube_tags": ["tag1", "tag2", ...up to ${PLATFORM_LIMITS.youtube.maxTags} tags],
+  "facebook_text": "engaging post text with emojis and hashtags",
+  "instagram_caption": "caption under ${PLATFORM_LIMITS.instagram.captionMaxLength} chars with hashtags (max ${PLATFORM_LIMITS.instagram.maxHashtags})",
+  "tiktok_caption": "short punchy caption under ${PLATFORM_LIMITS.tiktok.captionMaxLength} chars with trending hashtags"
+}
+
+Make each platform's copy unique - don't just copy/paste. Match the vibe of each platform.
+Follow the creative direction closely and incorporate the provided hashtags naturally.`,
+      },
+    ],
+  });
+
+  const text = response.content.find((b) => b.type === "text")?.text || "{}";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    return getDefaultCopy(title, platforms);
+  }
+
+  try {
+    const parsed = JSON.parse(jsonMatch[0]);
+    return {
+      youtube_title: parsed.youtube_title || null,
+      youtube_description: parsed.youtube_description || null,
+      youtube_tags: parsed.youtube_tags || [],
+      facebook_text: parsed.facebook_text || title,
+      instagram_caption: parsed.instagram_caption || title,
+      tiktok_caption: parsed.tiktok_caption || title,
+    };
+  } catch {
+    return getDefaultCopy(title, platforms);
   }
 }
 

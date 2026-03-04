@@ -3,6 +3,7 @@ import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getVideoAnalytics } from "@/lib/youtube";
 import { getFacebookVideoInsights, getInstagramMediaInsights } from "@/lib/meta";
+import { getTikTokVideoInsights } from "@/lib/tiktok";
 
 // GET /api/cron/sync-analytics - Daily sync of platform metrics
 export async function GET(request: NextRequest) {
@@ -87,6 +88,30 @@ export async function GET(request: NextRequest) {
         synced++;
       } catch (err) {
         errors.push(`IG ${content.instagram_media_id}: ${(err as Error).message}`);
+      }
+    }
+
+    // TikTok
+    if (content.tiktok_publish_id) {
+      try {
+        const stats = await getTikTokVideoInsights(content.tiktok_publish_id);
+        if (stats) {
+          await supabase.from("analytics_snapshots").upsert(
+            {
+              content_id: content.id,
+              platform: "tiktok",
+              views: stats.views,
+              likes: stats.likes,
+              comments: stats.comments,
+              shares: stats.shares,
+              snapshot_date: today,
+            },
+            { onConflict: "content_id,platform,snapshot_date" }
+          );
+          synced++;
+        }
+      } catch (err) {
+        errors.push(`TT ${content.tiktok_publish_id}: ${(err as Error).message}`);
       }
     }
   }

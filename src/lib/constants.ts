@@ -121,22 +121,6 @@ export const HASHTAG_SETS = {
   ],
 } as const;
 
-// Content templates for recurring series
-export const CONTENT_TEMPLATES = {
-  bachataTip: {
-    prefix: "Bachata Tip of the Week 💃",
-    hashtags: [...HASHTAG_SETS.bachata, ...HASHTAG_SETS.general],
-  },
-  drHiddenGem: {
-    prefix: "DR Hidden Gem 🇩🇴✨",
-    hashtags: [...HASHTAG_SETS.drTour, ...HASHTAG_SETS.general],
-  },
-  eventPromo: {
-    prefix: "🎉 Coming up!",
-    hashtags: [...HASHTAG_SETS.events, ...HASHTAG_SETS.general],
-  },
-} as const;
-
 // Posting schedule defaults (EST)
 export const DEFAULT_POST_TIMES = {
   youtube: { hour: 14, minute: 0 },   // 2:00 PM
@@ -151,6 +135,7 @@ export const NAV_ITEMS = [
   { label: "Content", href: "/dashboard/content", icon: "film" },
   { label: "Calendar", href: "/dashboard/calendar", icon: "calendar" },
   { label: "Events", href: "/dashboard/events", icon: "sparkles" },
+  { label: "Templates", href: "/dashboard/templates", icon: "fileText" },
   { label: "Uploads", href: "/dashboard/uploads", icon: "upload" },
   { label: "Analytics", href: "/dashboard/analytics", icon: "chart" },
   { label: "Settings", href: "/dashboard/settings", icon: "settings" },

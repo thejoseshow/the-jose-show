@@ -262,11 +262,16 @@ export async function getFacebookVideoInsights(videoId: string) {
   );
   const data = await res.json();
 
+  if (data.error) {
+    console.error(`FB insights error for ${videoId}:`, data.error.message);
+    return { views: 0, likes: 0, comments: 0, shares: 0 };
+  }
+
   return {
-    views: data.views || 0,
-    likes: data.likes?.summary?.total_count || 0,
-    comments: data.comments?.summary?.total_count || 0,
-    shares: data.shares?.count || 0,
+    views: typeof data.views === "number" ? data.views : 0,
+    likes: typeof data.likes?.summary?.total_count === "number" ? data.likes.summary.total_count : 0,
+    comments: typeof data.comments?.summary?.total_count === "number" ? data.comments.summary.total_count : 0,
+    shares: typeof data.shares?.count === "number" ? data.shares.count : 0,
   };
 }
 
@@ -277,9 +282,17 @@ export async function getInstagramMediaInsights(mediaId: string) {
   );
   const data = await res.json();
 
+  if (data.error) {
+    console.error(`IG insights error for ${mediaId}:`, data.error.message);
+    return { views: 0, likes: 0, comments: 0, shares: 0 };
+  }
+
   const metrics: Record<string, number> = {};
   for (const item of data.data || []) {
-    metrics[item.name] = item.values?.[0]?.value || 0;
+    if (item && typeof item.name === "string") {
+      const val = item.values?.[0]?.value;
+      metrics[item.name] = typeof val === "number" ? val : 0;
+    }
   }
 
   return {

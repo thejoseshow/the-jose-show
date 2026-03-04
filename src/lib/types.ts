@@ -43,6 +43,7 @@ export interface Video {
   storage_path: string | null;
   transcript: string | null;
   transcript_segments: TranscriptSegment[] | null;
+  language: string | null;
   status: VideoStatus;
   error_message: string | null;
   created_at: string;
@@ -96,6 +97,8 @@ export interface Content {
   facebook_post_id: string | null;
   instagram_media_id: string | null;
   tiktok_publish_id: string | null;
+  // Template
+  template_id: string | null;
   // Metadata
   created_at: string;
   updated_at: string;
@@ -158,6 +161,23 @@ export interface AnalyticsSnapshot {
   watch_time_seconds: number | null;
   snapshot_date: string;
   created_at: string;
+}
+
+export interface ContentTemplate {
+  id: string;
+  slug: string;
+  name: string;
+  description: string | null;
+  prefix: string;
+  default_platforms: Platform[];
+  hashtags: string[];
+  prompt_hint: string;
+  is_recurring: boolean;
+  frequency: "weekly" | "biweekly" | "monthly" | null;
+  preferred_day: number | null; // 0=Sun, 1=Mon, ..., 6=Sat
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 // --- API / UI Types ---
