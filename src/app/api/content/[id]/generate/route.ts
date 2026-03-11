@@ -14,9 +14,10 @@ export async function POST(
 
   try {
     const body = await request.json();
-    const { template_id, additional_context } = body as {
+    const { template_id, additional_context, is_spanish } = body as {
       template_id: string;
       additional_context?: string;
+      is_spanish?: boolean;
     };
 
     if (!template_id) {
@@ -61,7 +62,8 @@ export async function POST(
         prefix: template.prefix,
         description: template.description,
       },
-      additional_context
+      additional_context,
+      is_spanish ?? false
     );
 
     // Update content with generated copy and template_id

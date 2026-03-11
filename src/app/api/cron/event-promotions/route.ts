@@ -4,6 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { generateEventPromo } from "@/lib/claude";
 import { getNextInstance } from "@/lib/recurrence";
 import { getTemplateBySlug } from "@/lib/templates";
+import { triggerRender } from "@/lib/remotion";
 import type { Event, EventType, PromoScheduleItem } from "@/lib/types";
 
 // Map event types to template slugs for creative direction
@@ -138,6 +139,30 @@ export async function GET(request: NextRequest) {
         promo.generated = true;
         if (content) promo.content_id = content.id;
         generated++;
+
+        // Trigger Remotion EventPromo video render (non-blocking)
+        if (content && process.env.REMOTION_FUNCTION_NAME) {
+          triggerRender({
+            compositionId: "EventPromo",
+            contentId: content.id,
+            inputProps: {
+              eventName: event.name,
+              eventDate: eventDate.toLocaleDateString("en-US", {
+                weekday: "long",
+                month: "long",
+                day: "numeric",
+                hour: "numeric",
+                minute: "2-digit",
+              }),
+              eventLocation: event.location || "",
+              eventType: event.type,
+              promoType: promo.type,
+              daysUntil,
+            },
+          }).catch((err) => {
+            console.error(`Failed to trigger EventPromo render for ${event.name}:`, err);
+          });
+        }
       } catch (err) {
         console.error(`Failed to generate ${promo.type} for ${event.name}:`, err);
       }

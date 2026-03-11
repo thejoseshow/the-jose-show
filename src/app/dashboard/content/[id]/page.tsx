@@ -29,8 +29,9 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { ArrowLeft, Loader2, Trash2, Wand2 } from "lucide-react";
-import type { Content, ContentTemplate, Platform } from "@/lib/types";
+import { Switch } from "@/components/ui/switch";
+import { ArrowLeft, Loader2, Trash2, Wand2, Video, RefreshCw } from "lucide-react";
+import type { Content, ContentTemplate, Platform, RenderJob } from "@/lib/types";
 
 export default function ContentDetailPage({
   params,
@@ -58,6 +59,9 @@ export default function ContentDetailPage({
   const [selectedTemplateId, setSelectedTemplateId] = useState("");
   const [additionalContext, setAdditionalContext] = useState("");
   const [generating, setGenerating] = useState(false);
+  const [isSpanish, setIsSpanish] = useState(false);
+  const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
+  const [rendering, setRendering] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -155,6 +159,7 @@ export default function ContentDetailPage({
         body: JSON.stringify({
           template_id: selectedTemplateId,
           additional_context: additionalContext || undefined,
+          is_spanish: isSpanish,
         }),
       });
       const data = await res.json();
@@ -174,6 +179,83 @@ export default function ContentDetailPage({
       toast.error("Failed to generate copy");
     }
     setGenerating(false);
+  }
+
+  async function handleGenerateVideo(compositionId: string) {
+    if (!content) return;
+    setRendering(true);
+    try {
+      const inputProps: Record<string, unknown> =
+        compositionId === "BrandedClip"
+          ? {
+              clipUrl: content.media_url || "",
+              clipDurationInFrames: 150, // 5s default, Lambda will adjust
+              title: content.title,
+              socialHandles: {
+                instagram: "@thejoseadelshow",
+                tiktok: "@thejoseshow_",
+                youtube: "@Thejoseshowtv",
+              },
+            }
+          : compositionId === "CaptionOverlay"
+            ? {
+                clipUrl: content.media_url || "",
+                clipDurationInFrames: 150,
+                words: [],
+                captionStyle: "default",
+              }
+            : {};
+
+      const res = await fetch("/api/remotion/render", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          composition_id: compositionId,
+          content_id: content.id,
+          input_props: inputProps,
+        }),
+      });
+      const data = await res.json();
+      if (data.success && data.data) {
+        setRenderJob(data.data as RenderJob);
+        toast.success("Video render started");
+        pollRenderStatus(data.data.render_id);
+      } else {
+        toast.error("Failed to start render", { description: data.error });
+      }
+    } catch {
+      toast.error("Failed to start video render");
+    }
+    setRendering(false);
+  }
+
+  function pollRenderStatus(renderId: string) {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/remotion/status/${renderId}`);
+        const data = await res.json();
+        if (data.success && data.data) {
+          const job = data.data as RenderJob;
+          setRenderJob(job);
+          if (job.status === "completed") {
+            clearInterval(interval);
+            toast.success("Video render completed!");
+            if (job.output_url) {
+              setContent((prev) =>
+                prev ? { ...prev, media_url: job.output_url! } : prev
+              );
+            }
+          } else if (job.status === "failed") {
+            clearInterval(interval);
+            toast.error("Render failed", { description: job.error_message || undefined });
+          }
+        }
+      } catch {
+        clearInterval(interval);
+      }
+    }, 3000);
+    // Stop polling after 5 minutes
+    setTimeout(() => clearInterval(interval), 5 * 60 * 1000);
   }
 
   if (loading) {
@@ -355,6 +437,15 @@ export default function ContentDetailPage({
                 disabled={isPublished}
                 rows={2}
               />
+              <div className="flex items-center justify-between">
+                <Label htmlFor="spanish-toggle" className="text-sm">Spanish content</Label>
+                <Switch
+                  id="spanish-toggle"
+                  checked={isSpanish}
+                  onCheckedChange={setIsSpanish}
+                  disabled={isPublished}
+                />
+              </div>
               <Button
                 onClick={handleGenerateCopy}
                 disabled={!selectedTemplateId || isPublished || generating}
@@ -372,6 +463,73 @@ export default function ContentDetailPage({
                   </>
                 )}
               </Button>
+            </CardContent>
+          </Card>
+
+          {/* Generate Video */}
+          <Card>
+            <CardContent className="py-4 space-y-3">
+              <Label className="text-sm font-medium">Generate Video</Label>
+              {renderJob && (
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2 text-sm">
+                    <span className={
+                      renderJob.status === "completed" ? "text-green-400" :
+                      renderJob.status === "failed" ? "text-red-400" :
+                      "text-yellow-400"
+                    }>
+                      {renderJob.status === "rendering" ? "Rendering..." :
+                       renderJob.status === "completed" ? "Completed" :
+                       renderJob.status === "failed" ? "Failed" :
+                       "Pending"}
+                    </span>
+                    {renderJob.status === "rendering" && (
+                      <span className="text-muted-foreground">
+                        {Math.round(renderJob.progress * 100)}%
+                      </span>
+                    )}
+                  </div>
+                  {renderJob.status === "rendering" && (
+                    <div className="w-full bg-muted rounded-full h-2">
+                      <div
+                        className="bg-red-500 h-2 rounded-full transition-all"
+                        style={{ width: `${renderJob.progress * 100}%` }}
+                      />
+                    </div>
+                  )}
+                  {renderJob.status === "failed" && renderJob.error_message && (
+                    <p className="text-xs text-red-400">{renderJob.error_message}</p>
+                  )}
+                </div>
+              )}
+              <div className="flex flex-col gap-2">
+                <Button
+                  onClick={() => handleGenerateVideo("BrandedClip")}
+                  disabled={rendering || !content?.media_url}
+                  variant="outline"
+                  className="w-full justify-start"
+                >
+                  {rendering ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Video className="mr-2 h-4 w-4" />
+                  )}
+                  Branded Clip (Intro + Outro)
+                </Button>
+                <Button
+                  onClick={() => handleGenerateVideo("CaptionOverlay")}
+                  disabled={rendering || !content?.media_url}
+                  variant="outline"
+                  className="w-full justify-start"
+                >
+                  {rendering ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Video className="mr-2 h-4 w-4" />
+                  )}
+                  Caption Overlay
+                </Button>
+              </div>
             </CardContent>
           </Card>
         </div>

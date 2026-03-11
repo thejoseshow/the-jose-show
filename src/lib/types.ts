@@ -99,6 +99,8 @@ export interface Content {
   tiktok_publish_id: string | null;
   // Template
   template_id: string | null;
+  // Render
+  render_job_id: string | null;
   // Metadata
   created_at: string;
   updated_at: string;
@@ -176,6 +178,24 @@ export interface ContentTemplate {
   frequency: "weekly" | "biweekly" | "monthly" | null;
   preferred_day: number | null; // 0=Sun, 1=Mon, ..., 6=Sat
   is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export type RenderJobStatus = "pending" | "rendering" | "completed" | "failed";
+
+export type CompositionId = "EventPromo" | "BrandedClip" | "CaptionOverlay";
+
+export interface RenderJob {
+  id: string;
+  content_id: string | null;
+  composition_id: CompositionId;
+  input_props: Record<string, unknown>;
+  status: RenderJobStatus;
+  render_id: string | null;
+  output_url: string | null;
+  progress: number;
+  error_message: string | null;
   created_at: string;
   updated_at: string;
 }

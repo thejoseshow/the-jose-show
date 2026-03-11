@@ -93,6 +93,7 @@ export const generateSchema = z.object({
   transcript: z.string().min(1),
   title: z.string().min(1),
   platforms: z.array(platformEnum).optional(),
+  is_spanish: z.boolean().optional(),
 });
 
 export const thumbnailSchema = z.object({
@@ -100,6 +101,19 @@ export const thumbnailSchema = z.object({
   custom_prompt: z.string().max(2000).optional(),
 }).refine((d) => d.content_id || d.custom_prompt, {
   message: "content_id or custom_prompt is required",
+});
+
+export const renderRequestSchema = z.object({
+  composition_id: z.enum(["EventPromo", "BrandedClip", "CaptionOverlay"]),
+  content_id: z.string().uuid().optional(),
+  input_props: z.record(z.string(), z.unknown()),
+});
+
+export const renderWebhookSchema = z.object({
+  type: z.enum(["success", "timeout", "error"]),
+  renderId: z.string(),
+  outputUrl: z.string().optional(),
+  errors: z.array(z.object({ message: z.string() })).optional(),
 });
 
 // ============================================================

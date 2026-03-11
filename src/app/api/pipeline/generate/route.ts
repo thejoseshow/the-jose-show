@@ -19,7 +19,8 @@ export async function POST(request: NextRequest) {
     const copy = await generatePlatformCopy(
       parsed.data.transcript,
       parsed.data.title,
-      (parsed.data.platforms as Platform[]) || ["youtube", "facebook", "instagram", "tiktok"]
+      (parsed.data.platforms as Platform[]) || ["youtube", "facebook", "instagram", "tiktok"],
+      parsed.data.is_spanish ?? false
     );
 
     return NextResponse.json({ success: true, data: copy });
