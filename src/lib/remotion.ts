@@ -76,6 +76,8 @@ export async function triggerRender(params: {
       composition: compositionId,
       inputProps,
       codec: "h264",
+      maxRetries: 3,
+      framesPerLambda: 360, // Keep concurrency low for new AWS accounts
       webhook: {
         url: webhookUrl,
         secret: process.env.REMOTION_WEBHOOK_SECRET || null,

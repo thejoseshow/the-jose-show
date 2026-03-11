@@ -62,6 +62,7 @@ export default function ContentDetailPage({
   const [isSpanish, setIsSpanish] = useState(false);
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
   const [rendering, setRendering] = useState(false);
+  const [captionStyle, setCaptionStyle] = useState("default");
 
   useEffect(() => {
     async function load() {
@@ -202,7 +203,7 @@ export default function ContentDetailPage({
                 clipUrl: content.media_url || "",
                 clipDurationInFrames: 150,
                 words: [],
-                captionStyle: "default",
+                captionStyle,
               }
             : {};
 
@@ -516,6 +517,16 @@ export default function ContentDetailPage({
                   )}
                   Branded Clip (Intro + Outro)
                 </Button>
+                <Select value={captionStyle} onValueChange={setCaptionStyle}>
+                  <SelectTrigger className="w-full">
+                    <SelectValue placeholder="Caption style..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">Default (Fade In)</SelectItem>
+                    <SelectItem value="highlight">Highlight (Yellow Sweep)</SelectItem>
+                    <SelectItem value="karaoke">Karaoke (Color Change)</SelectItem>
+                  </SelectContent>
+                </Select>
                 <Button
                   onClick={() => handleGenerateVideo("CaptionOverlay")}
                   disabled={rendering || !content?.media_url}
