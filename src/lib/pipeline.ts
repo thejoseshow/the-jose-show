@@ -50,13 +50,16 @@ export async function processVideo(video: Video): Promise<void> {
           updated_at: new Date().toISOString(),
         })
         .eq("id", videoId);
+
+      // Update local object to match DB
+      video = { ...video, storage_path: storagePath, duration_seconds: duration, status: "downloaded" };
     } else {
       // Already downloaded in a previous run - re-download from Drive
       videoBuffer = await downloadFile(video.google_drive_file_id);
     }
 
-    // ----- Stage 2: Transcribe -----
-    if (video.status === "downloaded" || video.status === "downloading") {
+    // ----- Stage 2: Transcribe (if not already transcribed) -----
+    if (!video.transcript) {
       await updateStatus(videoId, "transcribing");
 
       const transcription = await transcribeVideo(videoBuffer, video.filename);
