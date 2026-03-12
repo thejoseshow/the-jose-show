@@ -13,11 +13,26 @@ const MODEL = "claude-haiku-4-5";
 
 const BRAND_SYSTEM_PROMPT = `You are a social media content writer for "${BRAND_VOICE.showName}" hosted by ${BRAND_VOICE.name}.
 
+WHO IS JOSE: ${BRAND_VOICE.bio}
+
 BRAND VOICE:
 - Tone: ${BRAND_VOICE.tone.join("; ")}
 - Topics: ${BRAND_VOICE.topics.join(", ")}
 - Naturally mix in Dominican Spanish phrases like: ${BRAND_VOICE.spanishPhrases.join(", ")}
 - DO NOT: ${BRAND_VOICE.doNot.join("; ")}
+
+CRITICAL - CONTENT TYPE DETECTION:
+Most of Jose's videos are him DANCING bachata or practicing footwork. When the transcript is song lyrics or music (Spanish romantic/bachata lyrics), the video shows Jose DANCING — NOT singing.
+- If transcript = song lyrics → title about DANCING, FOOTWORK, PRACTICE, or the VIBE of the dance
+- If transcript = Jose talking → title about what he's discussing
+- If transcript = conversation → could be teaching, podcast, or vlog
+Content types: ${BRAND_VOICE.contentTypes.join("; ")}
+
+TITLE STYLE EXAMPLES for dance clips:
+- "Working on my footwork 🔥" NOT "Best meditation is your kiss"
+- "This bachata hit different today 💃" NOT song lyric quotes
+- "Dominican style footwork practice" NOT translations of the lyrics
+- "When the music takes over 🎵" (about the dancing, not the words)
 
 PLATFORMS:
 - YouTube (@Thejoseshowtv): Longer videos up to 8 min, entertainment/culture/dance content
@@ -61,22 +76,30 @@ VIDEO DURATION: ${videoDuration} seconds
 TRANSCRIPT WITH TIMESTAMPS:
 ${segments.map((s) => `[${formatTime(s.start)} - ${formatTime(s.end)}] ${s.text}`).join("\n")}
 
-Find 3-5 of the most engaging moments. For each, provide:
+IMPORTANT - DETECT CONTENT TYPE:
+- If the transcript is mostly song lyrics (romantic Spanish, bachata/merengue lyrics), this is a DANCE VIDEO. Jose is dancing/practicing footwork, NOT singing. Title clips about the DANCING and FOOTWORK, not the song lyrics.
+- If Jose is speaking/talking, this is a vlog, teaching, or podcast clip. Title based on what he's saying.
+- If it's a mix, identify which parts are music vs speech.
+
+For short videos (under 90 seconds), recommend 1-3 clips that cover the best moments. For longer videos, find 3-5 clips.
+
+For each clip, provide:
 1. Start and end timestamps (in seconds)
 2. A score from 1-10 (10 = most engaging)
-3. Why this moment is engaging
-4. A catchy title
+3. Why this moment is engaging (what Jose is DOING, not song lyrics)
+4. A catchy title about the ACTIVITY (dancing, footwork, vibes, teaching, etc.)
 5. Which platforms it's best for
 
 Respond ONLY with a JSON array. Example:
-[{"start_time": 15.0, "end_time": 55.0, "score": 9, "reasoning": "Great energy, funny moment", "suggested_title": "When bachata hits different", "platforms": ["tiktok", "instagram", "facebook"]}]
+[{"start_time": 0.0, "end_time": 40.0, "score": 9, "reasoning": "Jose's footwork is clean, great energy", "suggested_title": "Working on my Dominican footwork 🔥", "platforms": ["tiktok", "instagram", "facebook"]}]
 
 Prioritize moments with:
-- High energy or emotion
+- Impressive footwork or dance moves
+- High energy or smooth transitions
+- Teaching moments or technique demos
 - Funny or surprising moments
-- Dance highlights
 - Cultural insights or stories
-- Quotable lines`,
+- Quotable lines (when Jose is actually talking)`,
       },
     ],
   });
@@ -130,6 +153,8 @@ ${clipTranscript}
 SUGGESTED TITLE: ${suggestedTitle}
 TARGET PLATFORMS: ${platforms.join(", ")}
 LANGUAGE: ${isSpanish ? "The video is primarily in SPANISH. Write captions in Spanish first, then add an English translation or mix. Make hashtags bilingual." : "The video is primarily in ENGLISH. Sprinkle in Dominican Spanish phrases naturally as Jose would."}
+
+IMPORTANT: If the transcript is song lyrics (not Jose talking), this is a DANCE clip. Write copy about Jose's dancing/footwork/vibes, NOT about the song lyrics. The title should reflect what Jose is DOING (practicing, dancing, performing footwork), not quote the song.
 
 Available hashtag sets:
 - Bachata: ${HASHTAG_SETS.bachata.join(" ")}

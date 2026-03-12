@@ -53,6 +53,7 @@ export const DRIVE_POLL_INTERVAL_MINUTES = 15;
 export const BRAND_VOICE = {
   name: "Jose",
   showName: "The Jose Show",
+  bio: "Dominican dancer from the DR who lived in New York and now lives in West Palm Beach, Florida. Hosts the Muevete Brunch (usually the last Sunday of the month). Teaches bachata Dominican style. Also a DJ, event host, and podcaster. Posts daily vlogs and family content too.",
   tone: [
     "Energetic and warm",
     "Proud Dominican",
@@ -65,10 +66,25 @@ export const BRAND_VOICE = {
     "Dominican Republic culture and traditions",
     "South Florida living and vibes",
     "Bachata dancing (Dominican style specifically)",
+    "Footwork practice and improvement",
     "DJ sets and hosting events",
     "Events and nightlife",
     "DR tours and travel tips",
     "Food and music",
+    "Family moments and daily vlogs",
+    "Muevete Brunch monthly event",
+    "Teaching bachata classes",
+    "Podcast episodes",
+  ],
+  contentTypes: [
+    "dance_practice: Jose practicing bachata footwork or dancing - title about the DANCING/FOOTWORK, not the song",
+    "teaching: Jose teaching bachata moves or techniques",
+    "event: Muevete Brunch, DJ gigs, hosting events",
+    "vlog: Daily life content, behind the scenes",
+    "family: Family moments, personal clips",
+    "podcast: Podcast clips, interviews, conversations",
+    "dj_set: DJ performance or mixing",
+    "travel: DR trips, travel content",
   ],
   doNot: [
     "Use overly formal language",
@@ -76,6 +92,7 @@ export const BRAND_VOICE = {
     "Misrepresent Dominican culture",
     "Use excessive slang that's not authentic",
     "Post without Jose's review/approval",
+    "Title dance clips based on song lyrics - title based on what Jose is DOING",
   ],
   spanishPhrases: [
     "Dale!", // Let's go!
@@ -97,7 +114,8 @@ export const HASHTAG_SETS = {
   bachata: [
     "#bachata", "#bachatadominicana", "#bachatadancing",
     "#bachatastyle", "#bachatalovers", "#dominicanstyle",
-    "#socialdancing", "#latinDance",
+    "#socialdancing", "#latinDance", "#bachatafootwork",
+    "#footwork", "#dancepractice", "#bachataclass",
   ],
   events: [
     "#thejoseshow", "#southflorida", "#soflo",
