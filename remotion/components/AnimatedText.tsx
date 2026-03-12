@@ -10,6 +10,7 @@ export const AnimatedText: React.FC<{
   bold?: boolean;
   align?: "left" | "center" | "right";
   maxWidth?: number;
+  letterSpacing?: number;
 }> = ({
   text,
   delay = 0,
@@ -18,6 +19,7 @@ export const AnimatedText: React.FC<{
   bold = false,
   align = "center",
   maxWidth,
+  letterSpacing = 0,
 }) => {
   const frame = useCurrentFrame();
   const { fps } = useVideoConfig();
@@ -44,8 +46,9 @@ export const AnimatedText: React.FC<{
         fontWeight: bold ? 900 : 400,
         color,
         textAlign: align,
-        lineHeight: 1.2,
+        lineHeight: 1.4,
         maxWidth,
+        letterSpacing,
         textShadow: "0 2px 8px rgba(0,0,0,0.5)",
       }}
     >

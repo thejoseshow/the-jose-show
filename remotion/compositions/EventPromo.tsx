@@ -5,20 +5,15 @@ import {
   spring,
   useVideoConfig,
   AbsoluteFill,
-  Sequence,
 } from "remotion";
-import { Logo } from "../components/Logo";
 import { AnimatedText } from "../components/AnimatedText";
-import { CountdownNumber } from "../components/CountdownNumber";
-import { BrandFooter } from "../components/BrandFooter";
 import {
   BRAND_BG_DARK,
   DR_RED,
   DR_BLUE,
   BRAND_ACCENT,
-  FPS,
 } from "../lib/constants";
-import { FONT_BOLD, FONT_REGULAR } from "../lib/fonts";
+import { FONT_BOLD } from "../lib/fonts";
 import type { EventPromoProps } from "../lib/types";
 
 export const EventPromo: React.FC<EventPromoProps> = ({
@@ -29,7 +24,7 @@ export const EventPromo: React.FC<EventPromoProps> = ({
   daysUntil,
 }) => {
   const frame = useCurrentFrame();
-  const { fps, width, height, durationInFrames } = useVideoConfig();
+  const { fps, width, durationInFrames } = useVideoConfig();
 
   // Background animation
   const bgRotation = interpolate(frame, [0, durationInFrames], [0, 360]);
@@ -85,7 +80,7 @@ export const EventPromo: React.FC<EventPromoProps> = ({
         }}
       />
 
-      {/* Content */}
+      {/* All content in a single flex column — no Sequence wrappers */}
       <div
         style={{
           position: "absolute",
@@ -94,74 +89,58 @@ export const EventPromo: React.FC<EventPromoProps> = ({
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
-          padding: 60,
-          gap: 32,
+          padding: "0 80px",
+          gap: 48,
         }}
       >
-        {/* Logo */}
-        <Sequence from={0} durationInFrames={durationInFrames}>
-          <Logo size={100} variant="white" />
-        </Sequence>
-
         {/* Promo type label */}
-        <Sequence from={10} durationInFrames={durationInFrames - 10}>
-          <PromoLabel type={promoType} />
-        </Sequence>
+        <PromoLabel type={promoType} />
 
-        {/* Countdown number (if countdown/reminder) */}
+        {/* Countdown number */}
         {isCountdown && daysUntil > 0 && (
-          <Sequence from={20} durationInFrames={durationInFrames - 20}>
-            <CountdownNumber number={daysUntil} />
-          </Sequence>
+          <CountdownNumber number={daysUntil} delay={10} />
         )}
 
         {/* Event name */}
-        <Sequence
-          from={isCountdown ? 35 : 20}
-          durationInFrames={durationInFrames}
-        >
-          <AnimatedText
-            text={eventName}
-            fontSize={52}
-            bold
-            maxWidth={width - 120}
-          />
-        </Sequence>
+        <AnimatedText
+          text={eventName}
+          delay={isCountdown ? 25 : 10}
+          fontSize={58}
+          bold
+          maxWidth={width - 160}
+        />
 
         {/* Date */}
-        <Sequence
-          from={isCountdown ? 45 : 30}
-          durationInFrames={durationInFrames}
-        >
-          <AnimatedText
-            text={eventDate}
-            fontSize={30}
-            color={BRAND_ACCENT}
-          />
-        </Sequence>
+        <AnimatedText
+          text={eventDate}
+          delay={isCountdown ? 35 : 20}
+          fontSize={34}
+          color={BRAND_ACCENT}
+          letterSpacing={3}
+        />
 
         {/* Location */}
         {eventLocation && (
-          <Sequence
-            from={isCountdown ? 55 : 40}
-            durationInFrames={durationInFrames}
-          >
-            <AnimatedText
-              text={`📍 ${eventLocation}`}
-              fontSize={26}
-              color="#FFFFFFAA"
-            />
-          </Sequence>
+          <AnimatedText
+            text={`📍 ${eventLocation}`}
+            delay={isCountdown ? 45 : 30}
+            fontSize={28}
+            color="#FFFFFFBB"
+            letterSpacing={1}
+          />
         )}
       </div>
 
-      {/* Brand footer */}
-      <Sequence from={60} durationInFrames={durationInFrames - 60}>
-        <BrandFooter />
-      </Sequence>
+      {/* Logo text — bottom left */}
+      <LogoText />
+
+      {/* Brand footer — bottom center */}
+      <BrandHandle />
     </AbsoluteFill>
   );
 };
+
+// ---- Sub-components with built-in animation (no Sequence needed) ----
 
 const PromoLabel: React.FC<{ type: EventPromoProps["promoType"] }> = ({
   type,
@@ -187,16 +166,140 @@ const PromoLabel: React.FC<{ type: EventPromoProps["promoType"] }> = ({
       style={{
         transform: `scale(${scale})`,
         background: `${DR_RED}CC`,
-        padding: "8px 24px",
-        borderRadius: 8,
-        fontSize: 18,
+        padding: "12px 32px",
+        borderRadius: 10,
+        fontSize: 20,
         fontFamily: FONT_BOLD,
         color: "#FFFFFF",
-        letterSpacing: 4,
+        letterSpacing: 6,
         textTransform: "uppercase",
       }}
     >
       {labels[type]}
+    </div>
+  );
+};
+
+const CountdownNumber: React.FC<{
+  number: number;
+  delay?: number;
+}> = ({ number, delay = 0 }) => {
+  const frame = useCurrentFrame();
+  const { fps } = useVideoConfig();
+
+  const adjustedFrame = Math.max(0, frame - delay);
+
+  const scale = spring({
+    frame: adjustedFrame,
+    fps,
+    config: { damping: 8, stiffness: 200, mass: 0.8 },
+  });
+
+  const opacity = interpolate(adjustedFrame, [0, 5], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 8,
+        opacity,
+        transform: `scale(${scale})`,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 140,
+          fontFamily: FONT_BOLD,
+          fontWeight: 900,
+          color: BRAND_ACCENT,
+          lineHeight: 1,
+          textShadow: `0 0 40px ${DR_RED}80, 0 4px 12px rgba(0,0,0,0.5)`,
+        }}
+      >
+        {number}
+      </div>
+      <div
+        style={{
+          fontSize: 26,
+          fontFamily: FONT_BOLD,
+          color: "#FFFFFF",
+          letterSpacing: 10,
+          textTransform: "uppercase",
+        }}
+      >
+        DAYS
+      </div>
+    </div>
+  );
+};
+
+const LogoText: React.FC = () => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [50, 60], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 120,
+        left: 60,
+        opacity,
+        display: "flex",
+        flexDirection: "column",
+        gap: 2,
+      }}
+    >
+      <div
+        style={{
+          fontSize: 22,
+          fontFamily: FONT_BOLD,
+          fontWeight: 900,
+          color: "#FFFFFF",
+          letterSpacing: 3,
+        }}
+      >
+        THE JOSE SHOW
+      </div>
+      <div
+        style={{
+          width: 60,
+          height: 3,
+          background: DR_RED,
+          borderRadius: 2,
+        }}
+      />
+    </div>
+  );
+};
+
+const BrandHandle: React.FC = () => {
+  const frame = useCurrentFrame();
+  const opacity = interpolate(frame, [60, 70], [0, 1], {
+    extrapolateRight: "clamp",
+  });
+
+  return (
+    <div
+      style={{
+        position: "absolute",
+        bottom: 50,
+        left: 0,
+        right: 0,
+        textAlign: "center",
+        opacity,
+        fontSize: 18,
+        fontFamily: FONT_BOLD,
+        color: "#FFFFFF66",
+        letterSpacing: 2,
+      }}
+    >
+      @thejoseadelshow
     </div>
   );
 };
