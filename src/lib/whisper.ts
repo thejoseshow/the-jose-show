@@ -1,5 +1,8 @@
 import OpenAI from "openai";
+import { extractAudio } from "./ffmpeg";
 import type { TranscriptSegment } from "./types";
+
+const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25MB
 
 let _openai: OpenAI | null = null;
 function getOpenAI() {
@@ -25,9 +28,19 @@ export async function transcribeVideo(
 ): Promise<TranscriptionResult> {
   const openai = getOpenAI();
 
+  // If file exceeds Whisper's 25MB limit, extract compressed audio first
+  let uploadBuffer = fileBuffer;
+  let uploadFilename = filename;
+  if (fileBuffer.length > WHISPER_MAX_BYTES) {
+    console.log(`File ${filename} is ${(fileBuffer.length / 1024 / 1024).toFixed(1)}MB, extracting audio...`);
+    uploadBuffer = await extractAudio(fileBuffer, filename);
+    uploadFilename = "audio.mp3";
+    console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+  }
+
   // Whisper API accepts file uploads - create a File-like object
-  const file = new File([new Uint8Array(fileBuffer)], filename, {
-    type: getMimeType(filename),
+  const file = new File([new Uint8Array(uploadBuffer)], uploadFilename, {
+    type: getMimeType(uploadFilename),
   });
 
   const response = await openai.audio.transcriptions.create({

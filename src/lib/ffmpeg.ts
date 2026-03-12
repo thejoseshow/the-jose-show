@@ -186,6 +186,38 @@ export async function extractThumbnail(
   }
 }
 
+/**
+ * Extract audio from video as compressed mp3 (for Whisper API 25MB limit).
+ */
+export async function extractAudio(
+  videoBuffer: Buffer,
+  inputFilename: string
+): Promise<Buffer> {
+  const tmpDir = await mkdtemp(join(tmpdir(), "tjs-audio-"));
+  const inputPath = join(tmpDir, inputFilename);
+  const outputPath = join(tmpDir, "audio.mp3");
+
+  try {
+    await writeFile(inputPath, videoBuffer);
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(inputPath)
+        .noVideo()
+        .audioCodec("libmp3lame")
+        .audioBitrate("64k")
+        .audioChannels(1)
+        .output(outputPath)
+        .on("end", () => resolve())
+        .on("error", (err) => reject(err))
+        .run();
+    });
+
+    return await readFile(outputPath);
+  } finally {
+    await cleanup(inputPath, outputPath);
+  }
+}
+
 async function cleanup(...paths: (string | null)[]) {
   for (const p of paths) {
     if (p) await unlink(p).catch(() => {});
