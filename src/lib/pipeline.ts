@@ -95,11 +95,16 @@ export async function processVideo(video: Video): Promise<void> {
     const duration = video.duration_seconds || 0;
 
     // Ask Claude to recommend clips
-    const recommendations = await analyzeTranscriptForClips(
+    let recommendations = await analyzeTranscriptForClips(
       video.transcript || "",
       segments,
       duration
     );
+
+    // For short videos (<90s), limit to 1 clip to stay within Vercel timeout
+    if (duration < 90 && recommendations.length > 1) {
+      recommendations = [recommendations.sort((a, b) => b.score - a.score)[0]];
+    }
 
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video

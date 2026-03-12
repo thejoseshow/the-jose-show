@@ -7,7 +7,7 @@ import { notifyPipelineError } from "@/lib/notifications";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 900; // 15 min (Vercel Pro max)
+export const maxDuration = 300; // 5 min (Vercel Hobby max)
 
 // GET /api/cron/process-uploads - Poll Drive + run full AI pipeline
 export async function GET(request: NextRequest) {
@@ -44,7 +44,7 @@ export async function GET(request: NextRequest) {
       .select("*")
       .in("status", ["new", "downloaded", "transcribed"])
       .order("created_at", { ascending: true })
-      .limit(2); // Process max 2 per cron run to stay within timeout
+      .limit(1); // Process 1 per cron run to stay within 5-min timeout
 
     let processed = 0;
     const errors: string[] = [];
