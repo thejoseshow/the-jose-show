@@ -34,7 +34,9 @@ export async function processVideo(video: Video): Promise<void> {
 
       videoBuffer = await downloadFile(video.google_drive_file_id);
       storagePath = `raw/${videoId}/${video.filename}`;
-      const storageUrl = await uploadClip(storagePath, videoBuffer, video.mime_type);
+
+      // Skip raw upload to Supabase Storage (free tier has 50MB limit).
+      // The buffer stays in memory for processing; only processed clips get uploaded.
 
       // Get duration
       const duration = await getVideoDuration(videoBuffer, video.filename).catch(() => null);
@@ -49,12 +51,8 @@ export async function processVideo(video: Video): Promise<void> {
         })
         .eq("id", videoId);
     } else {
-      // Already downloaded - fetch from storage
-      const { data } = supabase.storage
-        .from("clips")
-        .getPublicUrl(storagePath || "");
-      const res = await fetch(data.publicUrl);
-      videoBuffer = Buffer.from(await res.arrayBuffer());
+      // Already downloaded in a previous run - re-download from Drive
+      videoBuffer = await downloadFile(video.google_drive_file_id);
     }
 
     // ----- Stage 2: Transcribe -----
@@ -102,7 +100,7 @@ export async function processVideo(video: Video): Promise<void> {
 
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video
-      await createFullVideoContent(video, videoBuffer);
+      await createFullVideoContent(video, videoBuffer, isSpanish);
       await updateStatus(videoId, "clipped");
       return;
     }
@@ -240,32 +238,50 @@ export async function processVideo(video: Video): Promise<void> {
  * Used when Claude doesn't find specific clip-worthy moments,
  * or the video is short enough to post as-is.
  */
-async function createFullVideoContent(video: Video, videoBuffer: Buffer) {
-  const storagePath = video.storage_path || `raw/${video.id}/${video.filename}`;
-  const { data: urlData } = supabase.storage.from("clips").getPublicUrl(storagePath);
-
+async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false) {
   const transcript = video.transcript || "";
-  const title = video.filename.replace(/\.[^.]+$/, "");
+  const duration = video.duration_seconds || 0;
 
+  // Extract full video as compressed clip (fits under storage limits)
+  const clipResult = await extractClip(videoBuffer, video.filename, {
+    startTime: 0,
+    endTime: duration,
+    aspectRatio: "9:16",
+    maxDuration: 480,
+  });
+
+  // Upload compressed clip to storage
+  const clipStoragePath = `clips/${video.id}/${Date.now()}_full.mp4`;
+  const clipUrl = await uploadClip(clipStoragePath, clipResult.buffer, "video/mp4");
+
+  // Derive a readable title hint from transcript (not the ugly filename)
+  const titleHint = transcript.length > 10
+    ? transcript.slice(0, 80).replace(/\s+/g, " ").trim()
+    : "Untitled Video";
+
+  const platforms: Platform[] = ["youtube", "facebook", "instagram", "tiktok"];
   const copy = await generatePlatformCopy(
     transcript.slice(0, 1000),
-    title,
-    ["youtube"]
+    titleHint,
+    platforms,
+    isSpanish
   );
+
+  const title = copy.youtube_title || titleHint;
 
   await supabase.from("content").insert({
     type: "video_clip",
     status: "review",
     title,
-    description: "Full video - no specific clips extracted",
+    description: copy.youtube_description || "Full video",
     youtube_title: copy.youtube_title,
     youtube_description: copy.youtube_description,
     youtube_tags: copy.youtube_tags,
     facebook_text: copy.facebook_text,
     instagram_caption: copy.instagram_caption,
     tiktok_caption: copy.tiktok_caption,
-    media_url: urlData.publicUrl,
-    platforms: ["youtube"],
+    media_url: clipUrl,
+    platforms,
   });
 }
 
