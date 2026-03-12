@@ -7,7 +7,7 @@ import { notifyPipelineError } from "@/lib/notifications";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 300; // 5 min (Vercel Pro)
+export const maxDuration = 900; // 15 min (Vercel Pro max)
 
 // GET /api/cron/process-uploads - Poll Drive + run full AI pipeline
 export async function GET(request: NextRequest) {
