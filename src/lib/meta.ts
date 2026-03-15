@@ -8,10 +8,14 @@ const GRAPH_API = "https://graph.facebook.com/v21.0";
 const META_OAUTH_SCOPES =
   "pages_manage_posts,pages_read_engagement,instagram_basic,instagram_content_publish";
 
+function getSiteUrl(): string {
+  return process.env.NEXT_PUBLIC_SITE_URL || "https://thejoseshow.vercel.app";
+}
+
 export function getMetaAuthUrl(): string {
   const params = new URLSearchParams({
     client_id: process.env.META_APP_ID || "",
-    redirect_uri: `${process.env.NEXT_PUBLIC_SITE_URL}/api/auth/meta`,
+    redirect_uri: `${getSiteUrl()}/api/auth/meta`,
     scope: META_OAUTH_SCOPES,
     response_type: "code",
     state: "tjs_meta_auth",
@@ -20,13 +24,13 @@ export function getMetaAuthUrl(): string {
 }
 
 export async function exchangeMetaCode(code: string): Promise<void> {
-  // Step 1: Exchange code for short-lived token
+  // Step 1: Exchange code for short-lived user token
   const tokenRes = await fetch(
     `${GRAPH_API}/oauth/access_token?` +
       new URLSearchParams({
         client_id: process.env.META_APP_ID || "",
         client_secret: process.env.META_APP_SECRET || "",
-        redirect_uri: `${process.env.NEXT_PUBLIC_SITE_URL}/api/auth/meta`,
+        redirect_uri: `${getSiteUrl()}/api/auth/meta`,
         code,
       })
   );
@@ -35,7 +39,7 @@ export async function exchangeMetaCode(code: string): Promise<void> {
     throw new Error(`Meta code exchange error: ${tokenData.error.message}`);
   }
 
-  // Step 2: Exchange short-lived token for long-lived token (60 days)
+  // Step 2: Exchange short-lived token for long-lived user token (60 days)
   const longLivedRes = await fetch(
     `${GRAPH_API}/oauth/access_token?` +
       new URLSearchParams({
@@ -50,15 +54,31 @@ export async function exchangeMetaCode(code: string): Promise<void> {
     throw new Error(`Meta long-lived token error: ${longLivedData.error.message}`);
   }
 
-  // Step 3: Upsert to Supabase
+  // Step 3: Get Page Access Token (required for posting to Page + Instagram)
+  // A long-lived user token yields a non-expiring Page token
+  const pageId = process.env.META_PAGE_ID;
+  let pageToken = longLivedData.access_token; // fallback to user token
+
+  if (pageId) {
+    const pagesRes = await fetch(
+      `${GRAPH_API}/me/accounts?access_token=${longLivedData.access_token}`
+    );
+    const pagesData = await pagesRes.json();
+    const page = pagesData.data?.find((p: { id: string }) => p.id === pageId);
+    if (page?.access_token) {
+      pageToken = page.access_token;
+    } else {
+      console.warn("Page token not found in me/accounts — using user token. Page posting may fail.");
+    }
+  }
+
+  // Step 4: Upsert to Supabase (store Page token for posting)
   const { error } = await supabase.from("platform_tokens").upsert(
     {
       platform: "facebook",
-      access_token: longLivedData.access_token,
-      refresh_token: null,
-      expires_at: longLivedData.expires_in
-        ? new Date(Date.now() + longLivedData.expires_in * 1000).toISOString()
-        : null,
+      access_token: pageToken,
+      refresh_token: longLivedData.access_token, // store user token as backup
+      expires_at: null, // Page tokens from long-lived user tokens don't expire
       scopes: META_OAUTH_SCOPES.split(","),
       updated_at: new Date().toISOString(),
     },
@@ -232,22 +252,45 @@ export async function postToInstagram(params: InstagramReelParams): Promise<stri
  * Call this during initial setup or when refreshing.
  */
 export async function refreshMetaToken(): Promise<void> {
-  const currentToken = await getMetaToken();
+  const { data: tokenRow } = await supabase
+    .from("platform_tokens")
+    .select("*")
+    .eq("platform", "facebook")
+    .single();
+
+  if (!tokenRow) throw new Error("No Meta token found");
+
+  // Use the stored user token (refresh_token field) to get a fresh long-lived user token
+  const userToken = (tokenRow as PlatformToken).refresh_token || (tokenRow as PlatformToken).access_token;
 
   const res = await fetch(
-    `${GRAPH_API}/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}&fb_exchange_token=${currentToken}`
+    `${GRAPH_API}/oauth/access_token?grant_type=fb_exchange_token&client_id=${process.env.META_APP_ID}&client_secret=${process.env.META_APP_SECRET}&fb_exchange_token=${userToken}`
   );
   const data = await res.json();
 
   if (data.error) throw new Error(`Meta token refresh error: ${data.error.message}`);
 
+  // Re-fetch Page token from refreshed user token
+  const pageId = process.env.META_PAGE_ID;
+  let pageToken = data.access_token;
+
+  if (pageId) {
+    const pagesRes = await fetch(
+      `${GRAPH_API}/me/accounts?access_token=${data.access_token}`
+    );
+    const pagesData = await pagesRes.json();
+    const page = pagesData.data?.find((p: { id: string }) => p.id === pageId);
+    if (page?.access_token) {
+      pageToken = page.access_token;
+    }
+  }
+
   await supabase
     .from("platform_tokens")
     .update({
-      access_token: data.access_token,
-      expires_at: data.expires_in
-        ? new Date(Date.now() + data.expires_in * 1000).toISOString()
-        : null,
+      access_token: pageToken,
+      refresh_token: data.access_token,
+      expires_at: null,
       updated_at: new Date().toISOString(),
     })
     .eq("platform", "facebook");

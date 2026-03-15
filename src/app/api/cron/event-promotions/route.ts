@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
+import { withCronLog } from "@/lib/cron-logger";
 import { generateEventPromo } from "@/lib/claude";
 import { getNextInstance } from "@/lib/recurrence";
 import { getTemplateBySlug } from "@/lib/templates";
@@ -14,12 +15,13 @@ const EVENT_TYPE_TEMPLATE_MAP: Partial<Record<EventType, string>> = {
   dj_gig: "dj-set-highlight",
 };
 
-// GET /api/cron/event-promotions - Auto-generate promo posts for upcoming events
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  try {
+    const result = await withCronLog("event-promotions", async () => {
   const now = new Date();
   const thirtyDaysOut = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
 
@@ -54,7 +56,7 @@ export async function GET(request: NextRequest) {
   }
 
   if (!eventsToProcess.length) {
-    return NextResponse.json({ success: true, generated: 0, message: "No upcoming events" });
+    return { generated: 0, message: "No upcoming events" };
   }
 
   let generated = 0;
@@ -100,6 +102,7 @@ export async function GET(request: NextRequest) {
       if (Math.abs(daysUntil - promo.days_before) > 1) continue;
 
       try {
+        // Always generate bilingual promos — Jose's audience is mostly Dominican/bilingual
         const copy = await generateEventPromo(
           event.name,
           event.type,
@@ -114,7 +117,8 @@ export async function GET(request: NextRequest) {
           event.description,
           promo.type,
           daysUntil,
-          matchedTemplate ? { promptHint: matchedTemplate.prompt_hint, hashtags: matchedTemplate.hashtags } : undefined
+          matchedTemplate ? { promptHint: matchedTemplate.prompt_hint, hashtags: matchedTemplate.hashtags } : undefined,
+          true // bilingual
         );
 
         // Create content item for review
@@ -140,28 +144,30 @@ export async function GET(request: NextRequest) {
         if (content) promo.content_id = content.id;
         generated++;
 
-        // Trigger Remotion EventPromo video render (non-blocking)
+        // Trigger Remotion EventPromo video render
         if (content && process.env.REMOTION_FUNCTION_NAME) {
-          triggerRender({
-            compositionId: "EventPromo",
-            contentId: content.id,
-            inputProps: {
-              eventName: event.name,
-              eventDate: eventDate.toLocaleDateString("en-US", {
-                weekday: "long",
-                month: "long",
-                day: "numeric",
-                hour: "numeric",
-                minute: "2-digit",
-              }),
-              eventLocation: event.location || "",
-              eventType: event.type,
-              promoType: promo.type,
-              daysUntil,
-            },
-          }).catch((err) => {
-            console.error(`Failed to trigger EventPromo render for ${event.name}:`, err);
-          });
+          try {
+            await triggerRender({
+              compositionId: "EventPromo",
+              contentId: content.id,
+              inputProps: {
+                eventName: event.name,
+                eventDate: eventDate.toLocaleDateString("en-US", {
+                  weekday: "long",
+                  month: "long",
+                  day: "numeric",
+                  hour: "numeric",
+                  minute: "2-digit",
+                }),
+                eventLocation: event.location || "",
+                eventType: event.type,
+                promoType: promo.type,
+                daysUntil,
+              },
+            });
+          } catch (renderErr) {
+            console.error(`Failed to trigger EventPromo render for ${event.name}:`, renderErr);
+          }
         }
       } catch (err) {
         console.error(`Failed to generate ${promo.type} for ${event.name}:`, err);
@@ -178,5 +184,14 @@ export async function GET(request: NextRequest) {
       .eq("id", event.id);
   }
 
-  return NextResponse.json({ success: true, generated });
+  return { generated };
+    });
+
+    return NextResponse.json({ success: true, ...result });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
 }

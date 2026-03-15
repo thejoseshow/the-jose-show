@@ -3,17 +3,19 @@ import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { getWeeklyScheduleSuggestions } from "@/lib/templates";
 import { generateTemplatedCopy } from "@/lib/claude";
+import { withCronLog } from "@/lib/cron-logger";
 import type { Platform } from "@/lib/types";
 
-// GET /api/cron/suggest-content - Weekly: create content from recurring templates with AI copy
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  try {
+    const result = await withCronLog("suggest-content", async () => {
   const suggestions = await getWeeklyScheduleSuggestions();
   if (!suggestions.length) {
-    return NextResponse.json({ success: true, created: 0, message: "No templates due this week" });
+    return { created: 0, message: "No templates due this week" };
   }
 
   // Week start (Monday) for dedup
@@ -103,5 +105,14 @@ export async function GET(request: NextRequest) {
     created++;
   }
 
-  return NextResponse.json({ success: true, created });
+  return { created };
+    });
+
+    return NextResponse.json({ success: true, ...result });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
 }

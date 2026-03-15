@@ -40,6 +40,26 @@ export async function notifyPipelineError(videoFilename: string, error: string) 
   });
 }
 
+export async function notifyPublishPartialFailure(
+  title: string,
+  failedPlatforms: string[]
+) {
+  const to = process.env.NOTIFICATION_EMAIL;
+  if (!to) return;
+
+  await getResend().emails.send({
+    from: process.env.RESEND_FROM_EMAIL || "noreply@thejoseshow.com",
+    to,
+    subject: `\u26a0\ufe0f Partial publish failure: ${title}`,
+    html: `
+      <h2>Partial Publish Failure</h2>
+      <p><strong>${title}</strong> failed to publish to: ${failedPlatforms.join(", ")}</p>
+      <p>Other platforms were published successfully. You can retry the failed platforms from the dashboard.</p>
+      <p><a href="${process.env.NEXT_PUBLIC_SITE_URL}/dashboard/content" style="background:#e11d48;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;display:inline-block;">View in Dashboard</a></p>
+    `,
+  });
+}
+
 export async function notifyPublishSuccess(
   title: string,
   platforms: string[]

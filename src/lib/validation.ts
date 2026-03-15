@@ -31,7 +31,7 @@ export const createContentSchema = z.object({
 export const updateContentSchema = z.object({
   title: z.string().min(1).max(200).optional(),
   description: z.string().max(5000).nullable().optional(),
-  status: z.enum(["draft", "review", "approved", "scheduling", "publishing", "published", "failed"]).optional(),
+  status: z.enum(["draft", "review", "approved", "scheduling", "publishing", "published", "partially_published", "failed"]).optional(),
   youtube_title: z.string().max(100).nullable().optional(),
   youtube_description: z.string().max(5000).nullable().optional(),
   youtube_tags: z.array(z.string()).max(30).optional(),

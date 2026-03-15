@@ -4,13 +4,15 @@ import { supabase } from "@/lib/supabase";
 import { getVideoAnalytics } from "@/lib/youtube";
 import { getFacebookVideoInsights, getInstagramMediaInsights } from "@/lib/meta";
 import { getTikTokVideoInsights } from "@/lib/tiktok";
+import { withCronLog } from "@/lib/cron-logger";
 
-// GET /api/cron/sync-analytics - Daily sync of platform metrics
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  try {
+    const result = await withCronLog("sync-analytics", async () => {
   const today = new Date().toISOString().split("T")[0];
 
   // Get all published content
@@ -116,10 +118,18 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({
-    success: true,
+  return {
     synced,
     total_content: published?.length || 0,
     errors: errors.length > 0 ? errors : undefined,
-  });
+  };
+    });
+
+    return NextResponse.json({ success: true, ...result });
+  } catch (err) {
+    return NextResponse.json(
+      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
+      { status: 500 }
+    );
+  }
 }

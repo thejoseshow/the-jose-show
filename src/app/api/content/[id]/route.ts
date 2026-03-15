@@ -10,7 +10,7 @@ export async function GET(
   const { id } = await params;
   const { data, error } = await supabase
     .from("content")
-    .select("*, clips(*), events(*)")
+    .select("*, clips(*), events(*), publish_log(*)")
     .eq("id", id)
     .single();
 

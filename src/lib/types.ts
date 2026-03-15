@@ -21,6 +21,7 @@ export type ContentStatus =
   | "scheduling"
   | "publishing"
   | "published"
+  | "partially_published"
   | "failed";
 
 export type Platform = "youtube" | "facebook" | "instagram" | "tiktok";
@@ -46,6 +47,7 @@ export interface Video {
   language: string | null;
   status: VideoStatus;
   error_message: string | null;
+  retry_count: number;
   created_at: string;
   updated_at: string;
 }

@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import { uploadToYouTube } from "./youtube";
 import { postToFacebook, postToInstagram } from "./meta";
 import { postToTikTok } from "./tiktok";
-import { notifyPublishSuccess } from "./notifications";
+import { notifyPublishSuccess, notifyPublishPartialFailure } from "./notifications";
 import { validateMediaUrl, sanitizeError } from "./validation";
 import type { Platform } from "./types";
 
@@ -14,22 +14,32 @@ export async function publishContent(
   contentId: string,
   platforms?: Platform[]
 ): Promise<{ success: boolean; data: Record<string, { success: boolean; id?: string; error?: string }> }> {
-  // Atomic status transition: only publish if currently "approved"
-  const { data: content, error: lockError } = await supabase
-    .from("content")
-    .update({ status: "publishing", updated_at: new Date().toISOString() })
-    .eq("id", contentId)
-    .eq("status", "approved")
-    .select("*")
-    .maybeSingle();
+  // Atomic status transition: accept "approved" or "partially_published" (for retry)
+  // Try approved first, then partially_published
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let content: any = null;
 
-  if (lockError) {
-    sanitizeError(lockError, "publish:lock");
-    throw new Error("Failed to start publishing");
+  for (const fromStatus of ["approved", "partially_published"] as const) {
+    const { data, error: lockError } = await supabase
+      .from("content")
+      .update({ status: "publishing", updated_at: new Date().toISOString() })
+      .eq("id", contentId)
+      .eq("status", fromStatus)
+      .select("*")
+      .maybeSingle();
+
+    if (lockError) {
+      sanitizeError(lockError, "publish:lock");
+      throw new Error("Failed to start publishing");
+    }
+    if (data) {
+      content = data;
+      break;
+    }
   }
 
   if (!content) {
-    throw new Error("Content not found or not in approved status");
+    throw new Error("Content not found or not in publishable status");
   }
 
   // SSRF protection: validate media URLs
@@ -48,9 +58,24 @@ export async function publishContent(
     throw new Error("No platforms selected");
   }
 
-  const results: Record<string, { success: boolean; id?: string; error?: string }> = {};
+  const results: Record<string, { success: boolean; id?: string; error?: string; skipped?: boolean }> = {};
+
+  // Map of platform → existing post ID field
+  const platformPostIdFields: Record<Platform, string> = {
+    youtube: "youtube_video_id",
+    facebook: "facebook_post_id",
+    instagram: "instagram_media_id",
+    tiktok: "tiktok_publish_id",
+  };
 
   for (const platform of targetPlatforms) {
+    // Skip platforms that already succeeded (have a post ID)
+    const existingPostId = content[platformPostIdFields[platform]];
+    if (existingPostId) {
+      results[platform] = { success: true, id: existingPostId as string, skipped: true };
+      continue;
+    }
+
     try {
       const logEntry = {
         content_id: contentId,
@@ -162,24 +187,31 @@ export async function publishContent(
   }
 
   // Determine final status
-  const anySuccess = Object.values(results).some((r) => r.success);
-  const allSuccess = Object.values(results).every((r) => r.success);
-  const finalStatus = allSuccess ? "published" : anySuccess ? "published" : "failed";
+  const attempted = Object.entries(results).filter(([, r]) => !r.skipped);
+  const anyNewSuccess = attempted.some(([, r]) => r.success);
+  const anyFailure = attempted.some(([, r]) => !r.success);
+  const allSuccess = Object.values(results).every((r) => r.success); // includes skipped (already published)
+  const finalStatus = allSuccess ? "published" : anyNewSuccess ? "partially_published" : "failed";
 
   await supabase
     .from("content")
     .update({
       status: finalStatus,
-      published_at: anySuccess ? new Date().toISOString() : null,
+      published_at: anyNewSuccess ? new Date().toISOString() : (content.published_at as string | null),
       updated_at: new Date().toISOString(),
     })
     .eq("id", contentId);
 
-  if (anySuccess) {
+  if (allSuccess) {
     const successPlatforms = Object.entries(results)
       .filter(([, r]) => r.success)
       .map(([p]) => p);
-    await notifyPublishSuccess(content.title, successPlatforms).catch(console.error);
+    await notifyPublishSuccess(content.title as string, successPlatforms).catch(console.error);
+  } else if (anyNewSuccess && anyFailure) {
+    const failedPlatforms = attempted
+      .filter(([, r]) => !r.success)
+      .map(([p]) => p);
+    await notifyPublishPartialFailure(content.title as string, failedPlatforms).catch(console.error);
   }
 
   return { success: true, data: results };

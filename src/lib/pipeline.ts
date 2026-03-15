@@ -6,8 +6,12 @@ import { analyzeTranscriptForClips, generatePlatformCopy, generateThumbnailPromp
 import { generateThumbnail } from "./thumbnails";
 import { uploadClip, uploadThumbnail } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
+import { withRetry } from "./retry";
 import { MAX_VIDEO_SIZE_BYTES } from "./constants";
+import { getAppSetting } from "./settings";
 import type { Video, Platform } from "./types";
+
+const MAX_RETRIES = 3;
 
 /**
  * Full pipeline: process a single video from Google Drive.
@@ -32,7 +36,7 @@ export async function processVideo(video: Video): Promise<void> {
         throw new Error(`File too large: ${(fileSize / 1024 / 1024).toFixed(0)}MB exceeds ${MAX_VIDEO_SIZE_BYTES / 1024 / 1024}MB limit`);
       }
 
-      videoBuffer = await downloadFile(video.google_drive_file_id);
+      videoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive download" });
       storagePath = `raw/${videoId}/${video.filename}`;
 
       // Skip raw upload to Supabase Storage (free tier has 50MB limit).
@@ -55,14 +59,14 @@ export async function processVideo(video: Video): Promise<void> {
       video = { ...video, storage_path: storagePath, duration_seconds: duration, status: "downloaded" };
     } else {
       // Already downloaded in a previous run - re-download from Drive
-      videoBuffer = await downloadFile(video.google_drive_file_id);
+      videoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive re-download" });
     }
 
     // ----- Stage 2: Transcribe (if not already transcribed) -----
     if (!video.transcript) {
       await updateStatus(videoId, "transcribing");
 
-      const transcription = await transcribeVideo(videoBuffer, video.filename);
+      const transcription = await withRetry(() => transcribeVideo(videoBuffer, video.filename), { label: "Whisper transcription" });
 
       await supabase
         .from("videos")
@@ -95,20 +99,24 @@ export async function processVideo(video: Video): Promise<void> {
     const duration = video.duration_seconds || 0;
 
     // Ask Claude to recommend clips
-    let recommendations = await analyzeTranscriptForClips(
+    let recommendations = await withRetry(() => analyzeTranscriptForClips(
       video.transcript || "",
       segments,
       duration
-    );
+    ), { label: "Claude clip analysis" });
 
     // For short videos (<90s), limit to 1 clip to stay within Vercel timeout
     if (duration < 90 && recommendations.length > 1) {
       recommendations = [recommendations.sort((a, b) => b.score - a.score)[0]];
     }
 
+    // Check if auto-approve is enabled
+    const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
+    const contentStatus = autoApprove === true ? "approved" : "review";
+
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video
-      await createFullVideoContent(video, videoBuffer, isSpanish);
+      await createFullVideoContent(video, videoBuffer, isSpanish, contentStatus);
       await updateStatus(videoId, "clipped");
       return;
     }
@@ -137,7 +145,7 @@ export async function processVideo(video: Video): Promise<void> {
 
         // Upload clip to storage
         const clipStoragePath = `clips/${videoId}/${Date.now()}_${rec.suggested_title.replace(/[^a-zA-Z0-9]/g, "_").slice(0, 40)}.mp4`;
-        const clipUrl = await uploadClip(clipStoragePath, clipResult.buffer, "video/mp4");
+        const clipUrl = await withRetry(() => uploadClip(clipStoragePath, clipResult.buffer, "video/mp4"), { label: "clip upload" });
 
         // Save clip record
         const { data: clipRecord } = await supabase
@@ -157,12 +165,12 @@ export async function processVideo(video: Video): Promise<void> {
           .single();
 
         // Generate platform copy (bilingual if video is in Spanish)
-        const copy = await generatePlatformCopy(
+        const copy = await withRetry(() => generatePlatformCopy(
           clipTranscript,
           rec.suggested_title,
           rec.platforms,
           isSpanish
-        );
+        ), { label: "Claude copy generation" });
 
         // Generate thumbnail for YouTube clips
         let thumbnailUrl: string | null = null;
@@ -192,11 +200,11 @@ export async function processVideo(video: Video): Promise<void> {
           }
         }
 
-        // Create content record (status: review so Jose sees it)
+        // Create content record
         await supabase.from("content").insert({
           clip_id: clipRecord?.id || null,
           type: "video_clip",
-          status: "review",
+          status: contentStatus,
           title: rec.suggested_title,
           description: rec.reasoning,
           youtube_title: copy.youtube_title,
@@ -225,18 +233,34 @@ export async function processVideo(video: Video): Promise<void> {
     }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : "Unknown pipeline error";
-    console.error(`Pipeline failed for video ${videoId}:`, errorMsg);
+    const retryCount = (video.retry_count || 0) + 1;
+    console.error(`Pipeline failed for video ${videoId} (attempt ${retryCount}/${MAX_RETRIES}):`, errorMsg);
 
-    await supabase
-      .from("videos")
-      .update({
-        status: "failed",
-        error_message: errorMsg,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", videoId);
+    if (retryCount >= MAX_RETRIES) {
+      // Exhausted retries — mark as permanently failed
+      await supabase
+        .from("videos")
+        .update({
+          status: "failed",
+          error_message: errorMsg,
+          retry_count: retryCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
 
-    await notifyPipelineError(video.filename, errorMsg).catch(console.error);
+      await notifyPipelineError(video.filename, `Failed after ${MAX_RETRIES} attempts: ${errorMsg}`).catch(console.error);
+    } else {
+      // Increment retry_count but leave status as-is so the next cron run picks it up
+      await supabase
+        .from("videos")
+        .update({
+          error_message: `Attempt ${retryCount}: ${errorMsg}`,
+          retry_count: retryCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+    }
+
     throw err;
   }
 }
@@ -246,7 +270,7 @@ export async function processVideo(video: Video): Promise<void> {
  * Used when Claude doesn't find specific clip-worthy moments,
  * or the video is short enough to post as-is.
  */
-async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false) {
+async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review") {
   const transcript = video.transcript || "";
   const duration = video.duration_seconds || 0;
 
@@ -279,7 +303,7 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
 
   await supabase.from("content").insert({
     type: "video_clip",
-    status: "review",
+    status: contentStatus,
     title,
     description: copy.youtube_description || "Full video",
     youtube_title: copy.youtube_title,

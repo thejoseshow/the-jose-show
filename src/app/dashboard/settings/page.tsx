@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Separator } from "@/components/ui/separator";
+import { Switch } from "@/components/ui/switch";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -19,6 +20,15 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { toast } from "sonner";
+import { Loader2, Trash2, HardDrive } from "lucide-react";
+
+interface StorageStats {
+  total_files: number;
+  total_bytes: number;
+  orphaned_clips: number;
+  orphaned_thumbnails: number;
+  orphaned_bytes: number;
+}
 
 interface Connection {
   platform: string;
@@ -77,6 +87,10 @@ export default function SettingsPage() {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
+  const [cleaningUp, setCleaningUp] = useState(false);
+  const [autoApprove, setAutoApprove] = useState(false);
+  const [autoApproveLoading, setAutoApproveLoading] = useState(true);
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -89,9 +103,34 @@ export default function SettingsPage() {
     setLoading(false);
   }, []);
 
+  const fetchStorageStats = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/storage-cleanup");
+      const data = await res.json();
+      if (data.success) setStorageStats(data.data);
+    } catch {
+      // Storage stats are non-critical
+    }
+  }, []);
+
+  const fetchSettings = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const data = await res.json();
+      if (data.success) {
+        setAutoApprove(data.data?.auto_approve_pipeline === true);
+      }
+    } catch {
+      // Settings are non-critical
+    }
+    setAutoApproveLoading(false);
+  }, []);
+
   useEffect(() => {
     fetchConnections();
-  }, [fetchConnections]);
+    fetchStorageStats();
+    fetchSettings();
+  }, [fetchConnections, fetchStorageStats, fetchSettings]);
 
   async function handleDisconnect(platform: string) {
     setDisconnecting(platform);
@@ -110,6 +149,47 @@ export default function SettingsPage() {
       toast.error("Failed to disconnect");
     }
     setDisconnecting(null);
+  }
+
+  async function handleCleanup() {
+    setCleaningUp(true);
+    try {
+      const res = await fetch("/api/admin/storage-cleanup", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        const freed = (data.freed_bytes / 1024).toFixed(1);
+        toast.success(
+          `Cleaned up ${data.deleted_clips} clip(s) and ${data.deleted_thumbnails} thumbnail(s) (${freed} KB freed)`
+        );
+        await fetchStorageStats();
+      } else {
+        toast.error(data.error || "Cleanup failed");
+      }
+    } catch {
+      toast.error("Failed to clean up storage");
+    }
+    setCleaningUp(false);
+  }
+
+  async function handleAutoApproveToggle(checked: boolean) {
+    setAutoApprove(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_approve_pipeline: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "Auto-approve enabled" : "Auto-approve disabled");
+      } else {
+        setAutoApprove(!checked); // revert
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setAutoApprove(!checked);
+      toast.error("Failed to update setting");
+    }
   }
 
   function getConnection(platformId: string): Connection | undefined {
@@ -281,6 +361,80 @@ export default function SettingsPage() {
             );
           })}
         </div>
+      </div>
+
+      <Separator />
+
+      {/* Storage */}
+      <div>
+        <h2 className="text-lg font-semibold text-white mb-4">Storage</h2>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <HardDrive className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-medium">Supabase Storage</p>
+                  <p className="text-xs text-muted-foreground">
+                    {storageStats
+                      ? `${storageStats.total_files} file(s), ${(storageStats.total_bytes / (1024 * 1024)).toFixed(1)} MB used`
+                      : "Loading..."}
+                  </p>
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleCleanup}
+                disabled={cleaningUp || !storageStats || (storageStats.orphaned_clips + storageStats.orphaned_thumbnails === 0)}
+              >
+                {cleaningUp ? (
+                  <>
+                    <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                    Cleaning...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="mr-2 h-3 w-3" />
+                    Clean Up
+                  </>
+                )}
+              </Button>
+            </div>
+            {storageStats && (storageStats.orphaned_clips > 0 || storageStats.orphaned_thumbnails > 0) && (
+              <p className="text-xs text-yellow-400">
+                {storageStats.orphaned_clips + storageStats.orphaned_thumbnails} orphaned file(s) found ({(storageStats.orphaned_bytes / 1024).toFixed(1)} KB)
+              </p>
+            )}
+            {storageStats && storageStats.orphaned_clips === 0 && storageStats.orphaned_thumbnails === 0 && (
+              <p className="text-xs text-green-400">No orphaned files</p>
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <Separator />
+
+      {/* Automation */}
+      <div>
+        <h2 className="text-lg font-semibold text-white mb-4">Automation</h2>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Auto-Approve Content</p>
+                <p className="text-xs text-muted-foreground">
+                  Skip manual review — content goes straight to &quot;approved&quot; after processing
+                </p>
+              </div>
+              {autoApproveLoading ? (
+                <Skeleton className="h-5 w-10" />
+              ) : (
+                <Switch checked={autoApprove} onCheckedChange={handleAutoApproveToggle} />
+              )}
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

@@ -8,6 +8,7 @@ const STATUS_STYLES: Record<string, string> = {
   scheduling: "bg-purple-600/20 text-purple-400 border-transparent",
   publishing: "bg-purple-600/20 text-purple-400 border-transparent",
   published: "bg-green-600/20 text-green-400 border-transparent",
+  partially_published: "bg-orange-600/20 text-orange-400 border-transparent",
   failed: "bg-red-600/20 text-red-400 border-transparent",
 };
 

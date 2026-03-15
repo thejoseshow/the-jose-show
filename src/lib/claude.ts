@@ -210,7 +210,8 @@ export async function generateEventPromo(
   description: string | null,
   promoType: "announcement" | "countdown" | "reminder" | "recap",
   daysUntil: number,
-  templateContext?: { promptHint: string; hashtags: string[] }
+  templateContext?: { promptHint: string; hashtags: string[] },
+  isSpanish = false
 ): Promise<PlatformCopy> {
   const client = getClient();
 
@@ -236,6 +237,7 @@ ${promoType === "reminder" ? "This is a last-minute reminder. Create urgency!" :
 ${promoType === "recap" ? "This is a post-event recap. Celebrate the success and tease the next one!" : ""}
 ${promoType === "announcement" ? "This is the initial announcement. Generate hype!" : ""}
 ${templateContext ? `\nCREATIVE DIRECTION: ${templateContext.promptHint}\nHASHTAGS TO INCLUDE: ${templateContext.hashtags.join(" ")}` : ""}
+LANGUAGE: ${isSpanish ? "Write captions in Spanish first, then add English translation. Make hashtags bilingual. Jose's audience is mostly Dominican/bilingual." : "Write in English. Sprinkle in Dominican Spanish phrases naturally as Jose would."}
 
 Respond ONLY with JSON:
 {

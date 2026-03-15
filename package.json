@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
+    "@radix-ui/react-checkbox": "^1.3.3",
     "@remotion/cli": "^4.0.434",
     "@remotion/lambda": "^4.0.434",
     "@remotion/player": "^4.0.434",

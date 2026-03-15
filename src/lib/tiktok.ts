@@ -3,6 +3,10 @@ import type { PlatformToken } from "./types";
 
 const TIKTOK_API = "https://open.tiktokapis.com/v2";
 
+function getSiteUrl(): string {
+  return process.env.NEXT_PUBLIC_SITE_URL || "https://thejoseshow.vercel.app";
+}
+
 async function getTikTokToken(): Promise<string> {
   const { data } = await supabase
     .from("platform_tokens")
@@ -108,7 +112,7 @@ export async function exchangeTikTokCode(code: string) {
       client_secret: process.env.TIKTOK_CLIENT_SECRET || "",
       code,
       grant_type: "authorization_code",
-      redirect_uri: `${process.env.NEXT_PUBLIC_SITE_URL}/api/auth/tiktok`,
+      redirect_uri: `${getSiteUrl()}/api/auth/tiktok`,
     }),
   });
 
@@ -205,7 +209,7 @@ export async function getTikTokVideoInsights(
 export function getTikTokAuthUrl(): string {
   const params = new URLSearchParams({
     client_key: process.env.TIKTOK_CLIENT_KEY || "",
-    redirect_uri: `${process.env.NEXT_PUBLIC_SITE_URL}/api/auth/tiktok`,
+    redirect_uri: `${getSiteUrl()}/api/auth/tiktok`,
     scope: "user.info.basic,video.publish,video.upload,video.list",
     response_type: "code",
     state: "tjs_tiktok_auth",

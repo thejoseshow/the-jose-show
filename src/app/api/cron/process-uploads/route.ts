@@ -3,70 +3,60 @@ import { verifyCronSecret } from "@/lib/auth";
 import { listNewFiles } from "@/lib/google-drive";
 import { supabase } from "@/lib/supabase";
 import { processVideo } from "@/lib/pipeline";
-import { notifyPipelineError } from "@/lib/notifications";
+import { withCronLog } from "@/lib/cron-logger";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 300; // 5 min (Vercel Hobby max)
+export const maxDuration = 300;
 
-// GET /api/cron/process-uploads - Poll Drive + run full AI pipeline
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    // ----- Step 1: Detect new files in Google Drive -----
-    const newFiles = await listNewFiles();
-    let newRecords = 0;
+    const result = await withCronLog("process-uploads", async () => {
+      const newFiles = await listNewFiles();
+      let newRecords = 0;
 
-    for (const file of newFiles) {
-      const fileSize = parseInt(file.size, 10);
-      if (fileSize > MAX_VIDEO_SIZE_BYTES) {
-        console.warn(`Skipping ${file.name}: ${(fileSize / 1024 / 1024).toFixed(0)}MB exceeds limit`);
-        continue;
+      for (const file of newFiles) {
+        const fileSize = parseInt(file.size, 10);
+        if (fileSize > MAX_VIDEO_SIZE_BYTES) continue;
+
+        const { error } = await supabase.from("videos").insert({
+          google_drive_file_id: file.id,
+          filename: file.name,
+          mime_type: file.mimeType,
+          size_bytes: fileSize,
+          status: "new",
+        });
+        if (!error) newRecords++;
       }
 
-      const { error } = await supabase.from("videos").insert({
-        google_drive_file_id: file.id,
-        filename: file.name,
-        mime_type: file.mimeType,
-        size_bytes: fileSize,
-        status: "new",
-      });
+      const { data: pendingVideos } = await supabase
+        .from("videos")
+        .select("*")
+        .in("status", ["new", "downloaded", "transcribed"])
+        .order("created_at", { ascending: true })
+        .limit(1);
 
-      if (!error) newRecords++;
-    }
+      let processed = 0;
+      const errors: string[] = [];
 
-    // ----- Step 2: Process unfinished videos -----
-    const { data: pendingVideos } = await supabase
-      .from("videos")
-      .select("*")
-      .in("status", ["new", "downloaded", "transcribed"])
-      .order("created_at", { ascending: true })
-      .limit(1); // Process 1 per cron run to stay within 5-min timeout
-
-    let processed = 0;
-    const errors: string[] = [];
-
-    for (const videoRow of pendingVideos || []) {
-      try {
-        await processVideo(videoRow as Video);
-        processed++;
-      } catch (err) {
-        const errorMsg = err instanceof Error ? err.message : "Unknown error";
-        errors.push(`${videoRow.filename}: ${errorMsg}`);
+      for (const videoRow of pendingVideos || []) {
+        try {
+          await processVideo(videoRow as Video);
+          processed++;
+        } catch (err) {
+          errors.push(`${videoRow.filename}: ${err instanceof Error ? err.message : "Unknown error"}`);
+        }
       }
-    }
 
-    return NextResponse.json({
-      success: true,
-      new_files_detected: newRecords,
-      processed,
-      errors: errors.length > 0 ? errors : undefined,
+      return { new_files_detected: newRecords, processed, errors: errors.length > 0 ? errors : undefined };
     });
+
+    return NextResponse.json({ success: true, ...result });
   } catch (err) {
-    console.error("Process uploads error:", err);
     return NextResponse.json(
       { success: false, error: err instanceof Error ? err.message : "Unknown error" },
       { status: 500 }

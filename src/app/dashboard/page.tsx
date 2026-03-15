@@ -8,25 +8,55 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Video, RefreshCw, Eye, CheckCircle } from "lucide-react";
-import type { DashboardStats, ContentListItem } from "@/lib/types";
+import { Video, RefreshCw, Eye, CheckCircle, AlertTriangle, Sparkles, Clock, Lightbulb } from "lucide-react";
+import type { DashboardStats, ContentListItem, Platform } from "@/lib/types";
+
+interface PostingTime {
+  platform: Platform;
+  best_day: string;
+  best_hour: number;
+  avg_engagement: number;
+  sample_size: number;
+}
+
+interface ContentIdea {
+  idea: string;
+  type: string;
+  platforms: Platform[];
+  reasoning: string;
+}
+
+interface AttentionItem {
+  type: "failed_video" | "partial_publish" | "failed_content" | "expiring_token";
+  id: string;
+  title: string;
+  detail: string;
+  link: string;
+}
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [recentContent, setRecentContent] = useState<ContentListItem[]>([]);
+  const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
+  const [postingTimes, setPostingTimes] = useState<PostingTime[]>([]);
+  const [contentIdeas, setContentIdeas] = useState<ContentIdea[]>([]);
+  const [suggestionsLoading, setSuggestionsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       try {
-        const [statsRes, contentRes] = await Promise.all([
+        const [statsRes, contentRes, attentionRes] = await Promise.all([
           fetch("/api/content?stats=true"),
           fetch("/api/content?limit=5&sort=created_at"),
+          fetch("/api/dashboard/attention"),
         ]);
         const statsData = await statsRes.json();
         const contentData = await contentRes.json();
+        const attentionData = await attentionRes.json();
         if (statsData.success) setStats(statsData.data);
         if (contentData.success) setRecentContent(contentData.data || []);
+        if (attentionData.success) setAttentionItems(attentionData.data || []);
       } catch (err) {
         console.error("Failed to load dashboard:", err);
       } finally {
@@ -34,6 +64,18 @@ export default function DashboardPage() {
       }
     }
     load();
+
+    // Load AI suggestions separately (slower, non-blocking)
+    fetch("/api/suggestions")
+      .then((r) => r.json())
+      .then((data) => {
+        if (data.success) {
+          setPostingTimes(data.data.posting_times || []);
+          setContentIdeas(data.data.content_ideas || []);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setSuggestionsLoading(false));
   }, []);
 
   if (loading) {
@@ -87,6 +129,44 @@ export default function DashboardPage() {
         />
       </div>
 
+      {/* Needs Attention */}
+      {attentionItems.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-5 h-5 text-orange-400" />
+            <h2 className="text-lg font-semibold">Needs Attention</h2>
+            <Badge variant="secondary" className="text-xs">{attentionItems.length}</Badge>
+          </div>
+          <Card className="divide-y divide-border">
+            {attentionItems.map((item) => (
+              <Link
+                key={`${item.type}-${item.id}`}
+                href={item.link}
+                className="flex items-center gap-4 p-3 hover:bg-accent/50 transition-colors"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{item.title}</p>
+                  <p className="text-xs text-muted-foreground">{item.detail}</p>
+                </div>
+                <Badge
+                  variant="outline"
+                  className={
+                    item.type === "expiring_token"
+                      ? "bg-yellow-600/20 text-yellow-400 border-transparent"
+                      : "bg-red-600/20 text-red-400 border-transparent"
+                  }
+                >
+                  {item.type === "failed_video" ? "Failed Pipeline" :
+                   item.type === "partial_publish" ? "Partial Publish" :
+                   item.type === "failed_content" ? "Publish Failed" :
+                   "Token Expiring"}
+                </Badge>
+              </Link>
+            ))}
+          </Card>
+        </div>
+      )}
+
       {/* Recent Content */}
       <div>
         <div className="flex items-center justify-between mb-4">
@@ -139,26 +219,56 @@ export default function DashboardPage() {
 
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium">Posting Schedule</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2 text-sm">
-            {[
-              { platform: "YouTube", time: "2:00 PM EST" },
-              { platform: "Facebook", time: "11:00 AM EST" },
-              { platform: "Instagram", time: "6:00 PM EST" },
-              { platform: "TikTok", time: "7:00 PM EST" },
-            ].map((s) => (
-              <div key={s.platform} className="flex items-center justify-between text-muted-foreground">
-                <span>{s.platform}</span>
-                <span className="text-muted-foreground/60">{s.time}</span>
-              </div>
-            ))}
-            <div className="mt-4 pt-3 border-t border-border">
-              <p className="text-xs text-muted-foreground">
-                Tip: Post short-form content (TikTok, Reels) during evening hours for maximum engagement.
-                Upload new videos to Google Drive anytime — they&apos;ll be processed automatically.
-              </p>
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-yellow-400" />
+              <CardTitle className="text-sm font-medium">AI Suggestions</CardTitle>
             </div>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm">
+            {suggestionsLoading ? (
+              <div className="space-y-2">
+                {[...Array(3)].map((_, i) => (
+                  <div key={i} className="h-4 bg-muted rounded animate-pulse" />
+                ))}
+              </div>
+            ) : (
+              <>
+                {/* Best Posting Times */}
+                <div>
+                  <div className="flex items-center gap-1.5 mb-2">
+                    <Clock className="w-3.5 h-3.5 text-blue-400" />
+                    <span className="text-xs font-medium text-muted-foreground">Best Posting Times</span>
+                  </div>
+                  {postingTimes.map((t) => (
+                    <div key={t.platform} className="flex items-center justify-between text-muted-foreground py-0.5">
+                      <span className="capitalize">{t.platform}</span>
+                      <span className="text-muted-foreground/60">
+                        {t.best_day} {t.best_hour > 12 ? `${t.best_hour - 12}PM` : `${t.best_hour}AM`}
+                        {t.sample_size > 0 && <span className="text-[10px] ml-1">({t.sample_size} posts)</span>}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Content Ideas */}
+                {contentIdeas.length > 0 && (
+                  <div className="pt-3 border-t border-border">
+                    <div className="flex items-center gap-1.5 mb-2">
+                      <Lightbulb className="w-3.5 h-3.5 text-yellow-400" />
+                      <span className="text-xs font-medium text-muted-foreground">Content Ideas</span>
+                    </div>
+                    {contentIdeas.map((idea, i) => (
+                      <div key={i} className="py-1.5">
+                        <p className="text-xs">{idea.idea}</p>
+                        <p className="text-[10px] text-muted-foreground/60 mt-0.5">
+                          {idea.platforms.join(", ")} &middot; {idea.reasoning}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
       </div>

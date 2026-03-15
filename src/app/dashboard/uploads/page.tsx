@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Loader2, Play, RotateCcw } from "lucide-react";
 import type { Video } from "@/lib/types";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -31,19 +33,64 @@ const STATUS_ORDER = [
 export default function UploadsPage() {
   const [videos, setVideos] = useState<Video[]>([]);
   const [loading, setLoading] = useState(true);
+  const [processing, setProcessing] = useState(false);
+  const [processResult, setProcessResult] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
+
+  async function loadVideos() {
+    const res = await fetch("/api/pipeline/status");
+    const data = await res.json();
+    if (data.success) setVideos(data.data || []);
+  }
 
   useEffect(() => {
-    async function load() {
-      const res = await fetch("/api/pipeline/status");
-      const data = await res.json();
-      if (data.success) setVideos(data.data || []);
-      setLoading(false);
-    }
-    load();
-
-    const interval = setInterval(load, 30000);
+    loadVideos().then(() => setLoading(false));
+    const interval = setInterval(loadVideos, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  async function handleProcessNow() {
+    setProcessing(true);
+    setProcessResult(null);
+    try {
+      const res = await fetch("/api/pipeline/process", { method: "POST" });
+      const data = await res.json();
+      if (data.success) {
+        const parts: string[] = [];
+        if (data.new_files_detected > 0) parts.push(`${data.new_files_detected} new file(s) found`);
+        if (data.processed > 0) parts.push(`${data.processed} video(s) processed`);
+        if (data.errors?.length) parts.push(`${data.errors.length} error(s)`);
+        setProcessResult(parts.length > 0 ? parts.join(", ") : "No new videos to process");
+      } else {
+        setProcessResult(data.error || "Processing failed");
+      }
+      await loadVideos();
+    } catch {
+      setProcessResult("Failed to trigger processing");
+    }
+    setProcessing(false);
+  }
+
+  async function handleRetry(videoId: string) {
+    setRetrying(videoId);
+    try {
+      const res = await fetch("/api/pipeline/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: videoId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProcessResult(`Reset to "${data.reset_to}" — ready for reprocessing`);
+      } else {
+        setProcessResult(data.error || "Retry failed");
+      }
+      await loadVideos();
+    } catch {
+      setProcessResult("Failed to retry video");
+    }
+    setRetrying(null);
+  }
 
   if (loading) {
     return (
@@ -59,10 +106,34 @@ export default function UploadsPage() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-bold">Upload Pipeline</h1>
-        <p className="text-sm text-muted-foreground">
-          Auto-checks Google Drive every 15 minutes
-        </p>
+        <div>
+          <h1 className="text-2xl font-bold">Upload Pipeline</h1>
+          <p className="text-sm text-muted-foreground">
+            Auto-checks Google Drive daily at 8 AM
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {processResult && (
+            <span className="text-sm text-muted-foreground">{processResult}</span>
+          )}
+          <Button
+            onClick={handleProcessNow}
+            disabled={processing}
+            className="bg-red-600 hover:bg-red-700"
+          >
+            {processing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Processing...
+              </>
+            ) : (
+              <>
+                <Play className="mr-2 h-4 w-4" />
+                Process Now
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {videos.length === 0 ? (
@@ -122,9 +193,29 @@ export default function UploadsPage() {
                   </div>
 
                   {video.error_message && (
-                    <p className="text-xs text-destructive mt-2 bg-destructive/10 p-2 rounded">
-                      {video.error_message}
-                    </p>
+                    <div className="mt-2 flex items-center gap-2">
+                      <p className="text-xs text-destructive flex-1 bg-destructive/10 p-2 rounded">
+                        {video.error_message}
+                      </p>
+                      {video.status === "failed" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => handleRetry(video.id)}
+                          disabled={retrying === video.id}
+                          className="shrink-0"
+                        >
+                          {retrying === video.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <>
+                              <RotateCcw className="mr-1 h-3 w-3" />
+                              Retry
+                            </>
+                          )}
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </CardContent>
               </Card>

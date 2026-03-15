@@ -31,7 +31,8 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Loader2, Trash2, Wand2, Video, RefreshCw } from "lucide-react";
-import type { Content, ContentTemplate, Platform, RenderJob } from "@/lib/types";
+import { Badge } from "@/components/ui/badge";
+import type { Content, ContentTemplate, Platform, PublishLog, RenderJob } from "@/lib/types";
 
 export default function ContentDetailPage({
   params,
@@ -60,6 +61,8 @@ export default function ContentDetailPage({
   const [additionalContext, setAdditionalContext] = useState("");
   const [generating, setGenerating] = useState(false);
   const [isSpanish, setIsSpanish] = useState(false);
+  const [publishLogs, setPublishLogs] = useState<PublishLog[]>([]);
+  const [retryingPlatform, setRetryingPlatform] = useState<string | null>(null);
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
   const [rendering, setRendering] = useState(false);
   const [captionStyle, setCaptionStyle] = useState("default");
@@ -72,7 +75,8 @@ export default function ContentDetailPage({
       ]);
       const data = await contentRes.json();
       if (data.success && data.data) {
-        const c = data.data as Content;
+        const c = data.data as Content & { publish_log?: PublishLog[] };
+        setPublishLogs(c.publish_log || []);
         setContent(c);
         setTitle(c.title);
         setDescription(c.description || "");
@@ -142,6 +146,34 @@ export default function ContentDetailPage({
       toast.error("Publish failed", { description: data.error });
     }
     setPublishing(false);
+  }
+
+  async function handleRetryPlatform(platform: Platform) {
+    setRetryingPlatform(platform);
+    try {
+      const res = await fetch(`/api/content/${id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platforms: [platform] }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Retried ${platform}`);
+        // Reload content to refresh status and logs
+        const contentRes = await fetch(`/api/content/${id}`);
+        const refreshed = await contentRes.json();
+        if (refreshed.success && refreshed.data) {
+          const c = refreshed.data as Content & { publish_log?: PublishLog[] };
+          setContent(c);
+          setPublishLogs(c.publish_log || []);
+        }
+      } else {
+        toast.error(`Retry failed for ${platform}`, { description: data.error });
+      }
+    } catch {
+      toast.error("Retry request failed");
+    }
+    setRetryingPlatform(null);
   }
 
   async function handleDelete() {
@@ -286,8 +318,9 @@ export default function ContentDetailPage({
   }
 
   const canApprove = content.status === "draft" || content.status === "review";
-  const canPublish = content.status === "approved";
+  const canPublish = content.status === "approved" || content.status === "partially_published";
   const isPublished = content.status === "published";
+  const isPartiallyPublished = content.status === "partially_published";
 
   return (
     <div className="space-y-6">
@@ -543,6 +576,62 @@ export default function ContentDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Publish History */}
+          {publishLogs.length > 0 && (
+            <Card>
+              <CardContent className="py-4 space-y-3">
+                <Label className="text-sm font-medium">Publish History</Label>
+                <div className="space-y-2">
+                  {publishLogs
+                    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+                    .map((log) => (
+                      <div key={log.id} className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <Badge variant="secondary" className="text-[10px] px-1.5">{log.platform}</Badge>
+                          <span className={
+                            log.status === "success" ? "text-green-400" :
+                            log.status === "failed" ? "text-red-400" :
+                            "text-yellow-400"
+                          }>
+                            {log.status}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-muted-foreground">
+                            {log.published_at
+                              ? new Date(log.published_at).toLocaleString()
+                              : new Date(log.created_at).toLocaleString()}
+                          </span>
+                          {log.status === "failed" && isPartiallyPublished && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="h-6 text-xs px-2"
+                              disabled={retryingPlatform === log.platform}
+                              onClick={() => handleRetryPlatform(log.platform)}
+                            >
+                              {retryingPlatform === log.platform ? (
+                                <Loader2 className="h-3 w-3 animate-spin" />
+                              ) : (
+                                <RefreshCw className="h-3 w-3" />
+                              )}
+                            </Button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  {publishLogs.some((l) => l.status === "failed" && l.error_message) && (
+                    <div className="mt-2 text-xs text-red-400/80 bg-red-600/10 p-2 rounded">
+                      {publishLogs.filter((l) => l.status === "failed").map((l) => (
+                        <p key={l.id}>{l.platform}: {l.error_message}</p>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          )}
         </div>
 
         {/* Per-Platform Copy */}
