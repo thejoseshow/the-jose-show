@@ -110,6 +110,8 @@ export async function listNewFiles(): Promise<DriveFile[]> {
     fields: "files(id,name,mimeType,size,createdTime,modifiedTime)",
     orderBy: "createdTime desc",
     pageSize: 20,
+    includeItemsFromAllDrives: true,
+    supportsAllDrives: true,
   });
 
   const files = (response.data.files || []) as DriveFile[];
@@ -124,7 +126,7 @@ export async function downloadFile(
   const drive = google.drive({ version: "v3", auth });
 
   const response = await drive.files.get(
-    { fileId, alt: "media" },
+    { fileId, alt: "media", supportsAllDrives: true },
     { responseType: "arraybuffer" }
   );
 
@@ -140,6 +142,7 @@ export async function getFileMetadata(fileId: string) {
   const response = await drive.files.get({
     fileId,
     fields: "id,name,mimeType,size,videoMediaMetadata,createdTime",
+    supportsAllDrives: true,
   });
 
   return response.data;
