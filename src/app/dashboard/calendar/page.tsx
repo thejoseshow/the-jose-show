@@ -131,7 +131,7 @@ export default function CalendarPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
         <h1 className="text-2xl font-bold">Publishing Calendar</h1>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" onClick={() => setCurrentMonth(new Date(year, month - 1, 1))}>
@@ -144,7 +144,7 @@ export default function CalendarPage() {
           >
             Today
           </Button>
-          <span className="text-lg font-medium min-w-[200px] text-center">{monthName}</span>
+          <span className="text-lg font-medium text-center">{monthName}</span>
           <Button variant="outline" size="icon" onClick={() => setCurrentMonth(new Date(year, month + 1, 1))}>
             <ChevronRight className="w-4 h-4" />
           </Button>

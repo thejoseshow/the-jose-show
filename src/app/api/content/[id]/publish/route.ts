@@ -24,7 +24,7 @@ export async function POST(
     return NextResponse.json(result);
   } catch (err) {
     const message = err instanceof Error ? err.message : "Publishing failed";
-    const status = message.includes("not found") || message.includes("not in approved") ? 409 : 500;
+    const status = message.includes("not found") || message.includes("not in publishable") ? 409 : 500;
     return NextResponse.json({ success: false, error: message }, { status });
   }
 }

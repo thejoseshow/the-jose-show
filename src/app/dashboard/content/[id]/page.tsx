@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
@@ -66,6 +66,13 @@ export default function ContentDetailPage({
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
   const [rendering, setRendering] = useState(false);
   const [captionStyle, setCaptionStyle] = useState("default");
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     async function load() {
@@ -99,26 +106,30 @@ export default function ContentDetailPage({
 
   async function handleSave() {
     setSaving(true);
-    const res = await fetch(`/api/content/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title,
-        description,
-        youtube_title: ytTitle || null,
-        youtube_description: ytDescription || null,
-        youtube_tags: ytTags ? ytTags.split(",").map((t) => t.trim()) : null,
-        facebook_text: fbText || null,
-        instagram_caption: igCaption || null,
-        tiktok_caption: tkCaption || null,
-        platforms,
-        scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
-      }),
-    });
-    const data = await res.json();
-    toast(data.success ? "Content saved" : "Failed to save", {
-      description: data.success ? undefined : data.error,
-    });
+    try {
+      const res = await fetch(`/api/content/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title,
+          description,
+          youtube_title: ytTitle || null,
+          youtube_description: ytDescription || null,
+          youtube_tags: ytTags ? ytTags.split(",").map((t) => t.trim()) : null,
+          facebook_text: fbText || null,
+          instagram_caption: igCaption || null,
+          tiktok_caption: tkCaption || null,
+          platforms,
+          scheduled_at: scheduledAt ? new Date(scheduledAt).toISOString() : null,
+        }),
+      });
+      const data = await res.json();
+      toast(data.success ? "Content saved" : "Failed to save", {
+        description: data.success ? undefined : data.error,
+      });
+    } catch {
+      toast.error("Failed to save content");
+    }
     setSaving(false);
   }
 
@@ -133,17 +144,28 @@ export default function ContentDetailPage({
 
   async function handlePublish() {
     setPublishing(true);
-    const res = await fetch(`/api/content/${id}/publish`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ platforms }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      setContent((prev) => (prev ? { ...prev, status: "published" } : prev));
-      toast.success("Content published");
-    } else {
-      toast.error("Publish failed", { description: data.error });
+    try {
+      const res = await fetch(`/api/content/${id}/publish`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platforms }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        // Reload content to get actual status (could be published or partially_published)
+        const contentRes = await fetch(`/api/content/${id}`);
+        const refreshed = await contentRes.json();
+        if (refreshed.success && refreshed.data) {
+          const c = refreshed.data as Content & { publish_log?: PublishLog[] };
+          setContent(c);
+          setPublishLogs(c.publish_log || []);
+        }
+        toast.success("Content published");
+      } else {
+        toast.error("Publish failed", { description: data.error });
+      }
+    } catch {
+      toast.error("Publish failed");
     }
     setPublishing(false);
   }
@@ -177,9 +199,18 @@ export default function ContentDetailPage({
   }
 
   async function handleDelete() {
-    await fetch(`/api/content/${id}`, { method: "DELETE" });
-    toast.success("Content deleted");
-    router.push("/dashboard/content");
+    try {
+      const res = await fetch(`/api/content/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Content deleted");
+        router.push("/dashboard/content");
+      } else {
+        toast.error(data.error || "Failed to delete");
+      }
+    } catch {
+      toast.error("Failed to delete content");
+    }
   }
 
   async function handleGenerateCopy() {
@@ -263,6 +294,7 @@ export default function ContentDetailPage({
   }
 
   function pollRenderStatus(renderId: string) {
+    if (pollIntervalRef.current) clearInterval(pollIntervalRef.current);
     const interval = setInterval(async () => {
       try {
         const res = await fetch(`/api/remotion/status/${renderId}`);
@@ -272,6 +304,7 @@ export default function ContentDetailPage({
           setRenderJob(job);
           if (job.status === "completed") {
             clearInterval(interval);
+            pollIntervalRef.current = null;
             toast.success("Video render completed!");
             if (job.output_url) {
               setContent((prev) =>
@@ -280,15 +313,21 @@ export default function ContentDetailPage({
             }
           } else if (job.status === "failed") {
             clearInterval(interval);
+            pollIntervalRef.current = null;
             toast.error("Render failed", { description: job.error_message || undefined });
           }
         }
       } catch {
         clearInterval(interval);
+        pollIntervalRef.current = null;
       }
     }, 3000);
+    pollIntervalRef.current = interval;
     // Stop polling after 5 minutes
-    setTimeout(() => clearInterval(interval), 5 * 60 * 1000);
+    setTimeout(() => {
+      clearInterval(interval);
+      pollIntervalRef.current = null;
+    }, 5 * 60 * 1000);
   }
 
   if (loading) {
@@ -325,19 +364,19 @@ export default function ContentDetailPage({
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" asChild>
+      <div className="space-y-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" size="icon" className="shrink-0" asChild>
             <Link href="/dashboard/content">
               <ArrowLeft className="w-5 h-5" />
             </Link>
           </Button>
-          <h1 className="text-2xl font-bold">{content.title}</h1>
-          <StatusBadge status={content.status} />
+          <h1 className="text-xl sm:text-2xl font-bold truncate">{content.title}</h1>
+          <StatusBadge status={content.status} className="shrink-0" />
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           {canApprove && (
-            <Button onClick={handleApprove} variant="secondary" className="bg-blue-600 hover:bg-blue-700 text-white">
+            <Button onClick={handleApprove} variant="secondary" size="sm" className="bg-blue-600 hover:bg-blue-700 text-white">
               Approve
             </Button>
           )}
@@ -345,6 +384,7 @@ export default function ContentDetailPage({
             <Button
               onClick={handlePublish}
               disabled={publishing}
+              size="sm"
               className="bg-green-600 hover:bg-green-700"
             >
               {publishing ? (
@@ -357,7 +397,7 @@ export default function ContentDetailPage({
               )}
             </Button>
           )}
-          <Button onClick={handleSave} disabled={saving} className="bg-red-600 hover:bg-red-700">
+          <Button onClick={handleSave} disabled={saving} size="sm" className="bg-red-600 hover:bg-red-700">
             {saving ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
@@ -369,7 +409,7 @@ export default function ContentDetailPage({
           </Button>
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="outline" className="text-destructive hover:text-destructive">
+              <Button variant="outline" size="sm" className="text-destructive hover:text-destructive">
                 <Trash2 className="w-4 h-4" />
               </Button>
             </AlertDialogTrigger>

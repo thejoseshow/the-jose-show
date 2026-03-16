@@ -43,5 +43,5 @@ function addSecurityHeaders(response: NextResponse): NextResponse {
 }
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/api/content/:path*", "/api/publish/:path*", "/api/pipeline/:path*", "/api/events/:path*", "/api/analytics/:path*", "/api/thumbnails/:path*", "/api/connections/:path*"],
+  matcher: ["/dashboard/:path*", "/api/content/:path*", "/api/publish/:path*", "/api/pipeline/:path*", "/api/events/:path*", "/api/analytics/:path*", "/api/thumbnails/:path*", "/api/connections/:path*", "/api/settings/:path*", "/api/suggestions/:path*", "/api/dashboard/:path*", "/api/admin/:path*", "/api/remotion/:path*", "/api/templates/:path*"],
 };

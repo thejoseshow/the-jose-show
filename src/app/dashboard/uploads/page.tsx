@@ -183,13 +183,16 @@ export default function UploadsPage() {
                     {STATUS_ORDER.map((s, i) => (
                       <span
                         key={s}
-                        className={`text-[10px] ${
+                        className={`text-[10px] hidden sm:inline ${
                           i <= statusIdx ? "text-green-400" : "text-muted-foreground/40"
                         }`}
                       >
                         {s}
                       </span>
                     ))}
+                    <span className="sm:hidden text-[10px] text-muted-foreground">
+                      {statusIdx + 1}/{STATUS_ORDER.length}
+                    </span>
                   </div>
 
                   {video.error_message && (

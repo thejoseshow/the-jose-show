@@ -179,18 +179,20 @@ function ContentPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-3 items-center">
-        <Tabs value={statusFilter || "all"} onValueChange={(v) => setFilter("status", v)}>
-          <TabsList>
-            {STATUS_OPTIONS.map((opt) => (
-              <TabsTrigger key={opt.value} value={opt.value} className="text-xs">
-                {opt.label}
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
+      <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
+        <div className="overflow-x-auto w-full sm:w-auto">
+          <Tabs value={statusFilter || "all"} onValueChange={(v) => setFilter("status", v)}>
+            <TabsList>
+              {STATUS_OPTIONS.map((opt) => (
+                <TabsTrigger key={opt.value} value={opt.value} className="text-xs">
+                  {opt.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        </div>
         <Select value={platformFilter || "all"} onValueChange={(v) => setFilter("platform", v)}>
-          <SelectTrigger className="w-[150px] h-9 text-xs">
+          <SelectTrigger className="w-full sm:w-[150px] h-9 text-xs">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -268,7 +270,7 @@ function ContentPage() {
                           <Button
                             variant="outline"
                             size="sm"
-                            className="h-6 text-xs px-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                            className="h-6 text-xs px-2 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
                             disabled={publishingId === item.id}
                             onClick={(e) => handleQuickPublish(e, item.id)}
                           >
@@ -317,14 +319,18 @@ function CreateContentForm({ onClose }: { onClose: () => void }) {
   async function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setSaving(true);
-    const res = await fetch("/api/content", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, platforms }),
-    });
-    const data = await res.json();
-    if (data.success) {
-      router.push(`/dashboard/content/${data.data.id}`);
+    try {
+      const res = await fetch("/api/content", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, platforms }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        router.push(`/dashboard/content/${data.data.id}`);
+      }
+    } catch {
+      // silently fail
     }
     setSaving(false);
   }

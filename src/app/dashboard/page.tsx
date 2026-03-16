@@ -200,7 +200,7 @@ export default function DashboardPage() {
                   <p className="text-xs text-muted-foreground">{item.type}</p>
                 </div>
                 <StatusBadge status={item.status} />
-                <div className="flex gap-1">
+                <div className="hidden sm:flex gap-1">
                   {item.platforms.map((p) => (
                     <Badge key={p} variant="secondary" className="text-[10px] px-1.5">
                       {p}

@@ -66,10 +66,14 @@ export default function EventsPage() {
   async function handleDelete() {
     if (!deletingEvent) return;
     setDeleting(true);
-    const res = await fetch(`/api/events/${deletingEvent.id}`, { method: "DELETE" });
-    const data = await res.json();
-    if (data.success) {
-      setEvents((prev) => prev.filter((e) => e.id !== deletingEvent.id));
+    try {
+      const res = await fetch(`/api/events/${deletingEvent.id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        setEvents((prev) => prev.filter((e) => e.id !== deletingEvent.id));
+      }
+    } catch {
+      // silently fail
     }
     setDeleting(false);
     setDeletingEvent(null);
@@ -105,10 +109,10 @@ export default function EventsPage() {
           {events.map((event) => (
             <Card key={event.id} className="hover:border-muted-foreground/30 transition-colors">
               <CardContent className="py-5">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="flex items-center gap-2">
-                      <h3 className="font-medium">{event.name}</h3>
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-medium truncate">{event.name}</h3>
                       <Badge variant="secondary">
                         {EVENT_TYPE_LABELS[event.type]}
                       </Badge>
@@ -129,7 +133,7 @@ export default function EventsPage() {
                       {event.location && ` at ${event.location}`}
                     </p>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 shrink-0">
                     <span className="text-sm text-muted-foreground mr-2">
                       {event.promo_schedule
                         ? `${event.promo_schedule.filter((p) => p.generated).length}/${event.promo_schedule.length} promos`
@@ -251,19 +255,23 @@ function EventForm({
       recurrence_rule: isRecurring ? recurrenceRule : null,
     };
 
-    const res = await fetch(
-      isEdit ? `/api/events/${initialData.id}` : "/api/events",
-      {
-        method: isEdit ? "PATCH" : "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }
-    );
+    try {
+      const res = await fetch(
+        isEdit ? `/api/events/${initialData.id}` : "/api/events",
+        {
+          method: isEdit ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        }
+      );
 
-    const data = await res.json();
-    if (data.success) {
-      onSaved(data.data);
-      onClose();
+      const data = await res.json();
+      if (data.success) {
+        onSaved(data.data);
+        onClose();
+      }
+    } catch {
+      // silently fail
     }
     setSaving(false);
   }

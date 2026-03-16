@@ -12,6 +12,10 @@ const STATUS_STYLES: Record<string, string> = {
   failed: "bg-red-600/20 text-red-400 border-transparent",
 };
 
+const STATUS_LABELS: Record<string, string> = {
+  partially_published: "Partial",
+};
+
 export function StatusBadge({
   status,
   className,
@@ -24,7 +28,7 @@ export function StatusBadge({
       variant="outline"
       className={cn(STATUS_STYLES[status] || STATUS_STYLES.draft, className)}
     >
-      {status}
+      {STATUS_LABELS[status] || status}
     </Badge>
   );
 }
