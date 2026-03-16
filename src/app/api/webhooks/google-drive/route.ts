@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { listNewFiles } from "@/lib/google-drive";
-import { processVideo } from "@/lib/pipeline";
-import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
+import { processVideo, processPhoto } from "@/lib/pipeline";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -35,7 +35,8 @@ export async function POST(request: NextRequest) {
 
     for (const file of newFiles) {
       const fileSize = parseInt(file.size, 10);
-      if (fileSize > MAX_VIDEO_SIZE_BYTES) continue;
+      const sizeLimit = file.isPhoto ? MAX_PHOTO_SIZE_BYTES : MAX_VIDEO_SIZE_BYTES;
+      if (fileSize > sizeLimit) continue;
 
       const { data, error } = await supabase
         .from("videos")
@@ -44,6 +45,7 @@ export async function POST(request: NextRequest) {
           filename: file.name,
           mime_type: file.mimeType,
           size_bytes: fileSize,
+          is_photo: file.isPhoto,
           status: "new",
         })
         .select()
@@ -66,7 +68,12 @@ export async function POST(request: NextRequest) {
           .single();
 
         if (videoRow) {
-          await processVideo(videoRow as Video);
+          const v = videoRow as Video;
+          if (v.is_photo) {
+            await processPhoto(v);
+          } else {
+            await processVideo(v);
+          }
           processed = true;
         }
       } catch (processErr) {

@@ -42,6 +42,10 @@ export const PLATFORM_LIMITS = {
 export const MAX_VIDEO_SIZE_MB = 500;
 export const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
 
+// Photo size limit (25MB — reasonable for iPhone photos including HEIC)
+export const MAX_PHOTO_SIZE_MB = 25;
+export const MAX_PHOTO_SIZE_BYTES = MAX_PHOTO_SIZE_MB * 1024 * 1024;
+
 // Clip extraction defaults
 export const DEFAULT_CLIP_DURATION = { min: 30, max: 90 }; // seconds
 export const DEFAULT_ASPECT_RATIO = "9:16" as const;

@@ -268,6 +268,36 @@ export async function extractAudio(
   }
 }
 
+/**
+ * Convert HEIC/HEIF image to JPEG using FFmpeg.
+ * Returns a JPEG buffer.
+ */
+export async function convertHeicToJpeg(
+  imageBuffer: Buffer,
+  filename: string
+): Promise<Buffer> {
+  const tmpDir = await mkdtemp(join(tmpdir(), "tjs-heic-"));
+  const inputPath = join(tmpDir, filename);
+  const outputPath = join(tmpDir, "output.jpg");
+
+  try {
+    await writeFile(inputPath, imageBuffer);
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(inputPath)
+        .outputOptions(["-q:v", "2"])
+        .output(outputPath)
+        .on("end", () => resolve())
+        .on("error", (err) => reject(new Error(`HEIC conversion error: ${err.message}`)))
+        .run();
+    });
+
+    return await readFile(outputPath);
+  } finally {
+    await cleanup(inputPath, outputPath);
+  }
+}
+
 async function cleanup(...paths: (string | null)[]) {
   for (const p of paths) {
     if (p) await unlink(p).catch(() => {});

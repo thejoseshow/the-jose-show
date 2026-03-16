@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 import { uploadToYouTube } from "./youtube";
-import { postToFacebook, postToInstagram } from "./meta";
+import { postToFacebook, postToInstagram, postPhotoToFacebook, postPhotoToInstagram } from "./meta";
 import { postToTikTok } from "./tiktok";
 import { notifyPublishSuccess, notifyPublishPartialFailure } from "./notifications";
 import { validateMediaUrl, sanitizeError } from "./validation";
@@ -90,8 +90,11 @@ export async function publishContent(
 
       let platformPostId: string | null = null;
 
+      const isPhotoPost = content.type === "photo_post";
+
       switch (platform) {
         case "youtube": {
+          if (isPhotoPost) throw new Error("YouTube does not support photo posts");
           if (!content.media_url) throw new Error("No media URL");
           const videoRes = await fetch(content.media_url);
           const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
@@ -119,10 +122,17 @@ export async function publishContent(
 
         case "facebook": {
           if (!content.media_url) throw new Error("No media URL");
-          platformPostId = await postToFacebook({
-            videoUrl: content.media_url,
-            description: content.facebook_text || content.title,
-          });
+          if (isPhotoPost) {
+            platformPostId = await postPhotoToFacebook({
+              imageUrl: content.media_url,
+              message: content.facebook_text || content.title,
+            });
+          } else {
+            platformPostId = await postToFacebook({
+              videoUrl: content.media_url,
+              description: content.facebook_text || content.title,
+            });
+          }
           await supabase
             .from("content")
             .update({ facebook_post_id: platformPostId })
@@ -132,10 +142,17 @@ export async function publishContent(
 
         case "instagram": {
           if (!content.media_url) throw new Error("No media URL");
-          platformPostId = await postToInstagram({
-            videoUrl: content.media_url,
-            caption: content.instagram_caption || content.title,
-          });
+          if (isPhotoPost) {
+            platformPostId = await postPhotoToInstagram({
+              imageUrl: content.media_url,
+              caption: content.instagram_caption || content.title,
+            });
+          } else {
+            platformPostId = await postToInstagram({
+              videoUrl: content.media_url,
+              caption: content.instagram_caption || content.title,
+            });
+          }
           await supabase
             .from("content")
             .update({ instagram_media_id: platformPostId })
@@ -144,6 +161,7 @@ export async function publishContent(
         }
 
         case "tiktok": {
+          if (isPhotoPost) throw new Error("TikTok photo publishing not yet supported");
           if (!content.media_url) throw new Error("No media URL");
           platformPostId = await postToTikTok({
             videoUrl: content.media_url,

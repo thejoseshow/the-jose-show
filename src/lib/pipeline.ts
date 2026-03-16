@@ -1,13 +1,13 @@
 import { supabase } from "./supabase";
 import { downloadFile, getFileMetadata } from "./google-drive";
 import { transcribeVideo, generateSRT, getSegmentsInRange } from "./whisper";
-import { extractClip, getVideoDuration, extractThumbnail, extractFrames } from "./ffmpeg";
-import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt } from "./claude";
+import { extractClip, getVideoDuration, extractThumbnail, extractFrames, convertHeicToJpeg } from "./ffmpeg";
+import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt, analyzePhotoContent } from "./claude";
 import { generateThumbnail } from "./thumbnails";
 import { uploadClip, uploadThumbnail } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
 import { withRetry } from "./retry";
-import { MAX_VIDEO_SIZE_BYTES } from "./constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
 import { getAppSetting } from "./settings";
 import type { Video, Platform } from "./types";
 
@@ -329,6 +329,129 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     media_url: clipUrl,
     platforms,
   });
+}
+
+/**
+ * Full pipeline: process a single photo from Google Drive.
+ * Stages: download → convert HEIC if needed → upload → AI analyze → generate copy → review
+ */
+export async function processPhoto(video: Video): Promise<void> {
+  const videoId = video.id;
+
+  try {
+    // ----- Stage 1: Download -----
+    let photoBuffer: Buffer;
+
+    if (video.status === "new" || video.status === "downloading") {
+      await updateStatus(videoId, "downloading");
+
+      const metadata = await getFileMetadata(video.google_drive_file_id);
+      const fileSize = parseInt(metadata.size as string, 10);
+      if (fileSize > MAX_PHOTO_SIZE_BYTES) {
+        throw new Error(`Photo too large: ${(fileSize / 1024 / 1024).toFixed(0)}MB exceeds ${MAX_PHOTO_SIZE_BYTES / 1024 / 1024}MB limit`);
+      }
+
+      photoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive download (photo)" });
+
+      await supabase
+        .from("videos")
+        .update({
+          storage_path: `photos/${videoId}/${video.filename}`,
+          status: "downloaded",
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+
+      video = { ...video, storage_path: `photos/${videoId}/${video.filename}`, status: "downloaded" };
+    } else {
+      photoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive re-download (photo)" });
+    }
+
+    // ----- Stage 2: Convert HEIC → JPEG if needed -----
+    let mimeType = video.mime_type;
+    if (mimeType === "image/heic" || mimeType === "image/heif") {
+      photoBuffer = await convertHeicToJpeg(photoBuffer, video.filename);
+      mimeType = "image/jpeg";
+    }
+
+    // ----- Stage 3: Upload to Supabase Storage -----
+    await updateStatus(videoId, "clipping"); // reuse status for "processing"
+
+    const ext = mimeType === "image/png" ? "png" : "jpg";
+    const storagePath = `photos/${videoId}/${Date.now()}.${ext}`;
+    const photoUrl = await withRetry(
+      () => uploadClip(storagePath, photoBuffer, mimeType),
+      { label: "photo upload" }
+    );
+
+    // ----- Stage 4: AI Analysis -----
+    const { title, visualContext } = await withRetry(
+      () => analyzePhotoContent(photoBuffer, mimeType),
+      { label: "Claude photo analysis" }
+    );
+
+    // ----- Stage 5: Generate platform copy (skip YouTube — no photo support) -----
+    const platforms: Platform[] = ["facebook", "instagram"];
+    const copy = await withRetry(
+      () => generatePlatformCopy(
+        visualContext, // use visual context as the "transcript" since there's no audio
+        title,
+        platforms,
+        false,
+        visualContext
+      ),
+      { label: "Claude copy generation (photo)" }
+    );
+
+    // ----- Stage 6: Create content record -----
+    const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
+    const contentStatus = autoApprove === true ? "approved" : "review";
+
+    await supabase.from("content").insert({
+      type: "photo_post",
+      status: contentStatus,
+      title,
+      description: visualContext,
+      facebook_text: copy.facebook_text,
+      instagram_caption: copy.instagram_caption,
+      tiktok_caption: copy.tiktok_caption,
+      media_url: photoUrl,
+      thumbnail_url: photoUrl,
+      platforms,
+    });
+
+    await updateStatus(videoId, "clipped");
+    await notifyContentReady(1).catch(console.error);
+  } catch (err) {
+    const errorMsg = err instanceof Error ? err.message : "Unknown pipeline error";
+    const retryCount = (video.retry_count || 0) + 1;
+    console.error(`Photo pipeline failed for ${videoId} (attempt ${retryCount}/${MAX_RETRIES}):`, errorMsg);
+
+    if (retryCount >= MAX_RETRIES) {
+      await supabase
+        .from("videos")
+        .update({
+          status: "failed",
+          error_message: errorMsg,
+          retry_count: retryCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+
+      await notifyPipelineError(video.filename, `Failed after ${MAX_RETRIES} attempts: ${errorMsg}`).catch(console.error);
+    } else {
+      await supabase
+        .from("videos")
+        .update({
+          error_message: `Attempt ${retryCount}: ${errorMsg}`,
+          retry_count: retryCount,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", videoId);
+    }
+
+    throw err;
+  }
 }
 
 async function updateStatus(videoId: string, status: Video["status"]) {

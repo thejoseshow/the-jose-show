@@ -245,6 +245,82 @@ export async function postToInstagram(params: InstagramReelParams): Promise<stri
   return publishData.id;
 }
 
+// ----- Facebook Photo Post -----
+
+interface FacebookPhotoParams {
+  imageUrl: string; // Publicly accessible URL
+  message: string;
+}
+
+/**
+ * Post a photo to a Facebook Page.
+ */
+export async function postPhotoToFacebook(params: FacebookPhotoParams): Promise<string> {
+  const { imageUrl, message } = params;
+  const token = await getMetaToken();
+  const pageId = process.env.META_PAGE_ID;
+  if (!pageId) throw new Error("Missing META_PAGE_ID");
+
+  const res = await fetch(`${GRAPH_API}/${pageId}/photos`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      access_token: token,
+      url: imageUrl,
+      message,
+    }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(`FB photo error: ${data.error.message}`);
+
+  return data.id || data.post_id;
+}
+
+// ----- Instagram Photo Post -----
+
+interface InstagramPhotoParams {
+  imageUrl: string; // Publicly accessible URL
+  caption: string;
+}
+
+/**
+ * Post a photo to Instagram via the Content Publishing API.
+ * Unlike Reels, image containers don't need status polling.
+ */
+export async function postPhotoToInstagram(params: InstagramPhotoParams): Promise<string> {
+  const { imageUrl, caption } = params;
+  const token = await getMetaToken();
+  const igAccountId = process.env.META_INSTAGRAM_ACCOUNT_ID;
+  if (!igAccountId) throw new Error("Missing META_INSTAGRAM_ACCOUNT_ID");
+
+  // Step 1: Create IMAGE container (no polling needed for photos)
+  const containerRes = await fetch(`${GRAPH_API}/${igAccountId}/media`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      access_token: token,
+      image_url: imageUrl,
+      caption,
+    }),
+  });
+  const containerData = await containerRes.json();
+  if (containerData.error) throw new Error(`IG photo container error: ${containerData.error.message}`);
+
+  // Step 2: Publish
+  const publishRes = await fetch(`${GRAPH_API}/${igAccountId}/media_publish`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      access_token: token,
+      creation_id: containerData.id,
+    }),
+  });
+  const publishData = await publishRes.json();
+  if (publishData.error) throw new Error(`IG photo publish error: ${publishData.error.message}`);
+
+  return publishData.id;
+}
+
 // ----- Token Refresh -----
 
 /**

@@ -88,6 +88,7 @@ export interface DriveFile {
   size: string;
   createdTime: string;
   modifiedTime: string;
+  isPhoto: boolean;
 }
 
 export async function listNewFiles(): Promise<DriveFile[]> {
@@ -106,7 +107,7 @@ export async function listNewFiles(): Promise<DriveFile[]> {
   );
 
   const response = await drive.files.list({
-    q: `'${folderId}' in parents and mimeType contains 'video/' and trashed=false`,
+    q: `'${folderId}' in parents and (mimeType contains 'video/' or mimeType contains 'image/') and trashed=false`,
     fields: "files(id,name,mimeType,size,createdTime,modifiedTime)",
     orderBy: "createdTime desc",
     pageSize: 20,
@@ -114,8 +115,10 @@ export async function listNewFiles(): Promise<DriveFile[]> {
     supportsAllDrives: true,
   });
 
-  const files = (response.data.files || []) as DriveFile[];
-  return files.filter((f) => !existingIds.has(f.id));
+  const rawFiles = (response.data.files || []) as Omit<DriveFile, "isPhoto">[];
+  return rawFiles
+    .filter((f) => !existingIds.has(f.id))
+    .map((f) => ({ ...f, isPhoto: f.mimeType.startsWith("image/") }));
 }
 
 export async function downloadFile(

@@ -91,6 +91,71 @@ Be specific and factual about what you SEE.`,
   return response.content.find((b) => b.type === "text")?.text || "";
 }
 
+/**
+ * Analyze a photo visually with Claude and return a title + scene description.
+ * Used for photos dropped into Google Drive (no transcript/clips needed).
+ */
+export async function analyzePhotoContent(
+  imageBuffer: Buffer,
+  mimeType: string
+): Promise<{ title: string; visualContext: string }> {
+  const client = getClient();
+
+  // Normalize MIME type for the API
+  const mediaType = (
+    mimeType === "image/heic" || mimeType === "image/heif" ? "image/jpeg" : mimeType
+  ) as "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 500,
+    system: BRAND_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "image" as const,
+            source: {
+              type: "base64" as const,
+              media_type: mediaType,
+              data: imageBuffer.toString("base64"),
+            },
+          },
+          {
+            type: "text" as const,
+            text: `This is a photo from Jose's phone (Dominican dancer/entertainer/content creator).
+
+Describe the scene in 2-3 sentences, then suggest a catchy social media title.
+
+Focus on:
+- What is Jose doing? (dancing, eating, at an event, with family, traveling, etc.)
+- Where is he? (studio, restaurant, club, beach, home, DR, etc.)
+- Who else is in the photo? (alone, wife Johanna, son Max, students, crowd, etc.)
+- What's the vibe? (fun, romantic, energetic, chill, family time, etc.)
+
+Respond ONLY with JSON:
+{"title": "short catchy title for social media", "visualContext": "2-3 sentence scene description"}`,
+          },
+        ],
+      },
+    ],
+  });
+
+  const text = response.content.find((b) => b.type === "text")?.text || "{}";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  try {
+    const parsed = JSON.parse(jsonMatch?.[0] || "{}");
+    return {
+      title: parsed.title || "New photo from Jose",
+      visualContext: parsed.visualContext || "",
+    };
+  } catch {
+    return { title: "New photo from Jose", visualContext: "" };
+  }
+}
+
 export interface ClipRecommendation {
   start_time: number;
   end_time: number;

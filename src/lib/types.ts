@@ -45,6 +45,7 @@ export interface Video {
   transcript: string | null;
   transcript_segments: TranscriptSegment[] | null;
   language: string | null;
+  is_photo: boolean;
   status: VideoStatus;
   error_message: string | null;
   retry_count: number;
@@ -77,7 +78,7 @@ export interface Content {
   id: string;
   clip_id: string | null;
   event_id: string | null;
-  type: "video_clip" | "event_promo" | "story" | "post";
+  type: "video_clip" | "event_promo" | "story" | "post" | "photo_post";
   status: ContentStatus;
   title: string;
   description: string | null;

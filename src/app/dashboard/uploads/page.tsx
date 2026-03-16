@@ -6,7 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Loader2, Play, RotateCcw } from "lucide-react";
+import { Camera, Loader2, Play, RotateCcw } from "lucide-react";
 import type { Video } from "@/lib/types";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -20,12 +20,20 @@ const STATUS_STYLES: Record<string, string> = {
   failed: "bg-red-500 text-white border-transparent",
 };
 
-const STATUS_ORDER = [
+const STATUS_ORDER_VIDEO = [
   "new",
   "downloading",
   "downloaded",
   "transcribing",
   "transcribed",
+  "clipping",
+  "clipped",
+];
+
+const STATUS_ORDER_PHOTO = [
+  "new",
+  "downloading",
+  "downloaded",
   "clipping",
   "clipped",
 ];
@@ -139,32 +147,36 @@ export default function UploadsPage() {
       {videos.length === 0 ? (
         <Card>
           <CardContent className="py-12 text-center">
-            <p className="text-muted-foreground mb-2">No videos in the pipeline.</p>
+            <p className="text-muted-foreground mb-2">No files in the pipeline.</p>
             <p className="text-sm text-muted-foreground/60">
-              Drop a video file in the connected Google Drive folder to start.
+              Drop a video or photo in the connected Google Drive folder to start.
             </p>
           </CardContent>
         </Card>
       ) : (
         <div className="space-y-3">
           {videos.map((video) => {
-            const statusIdx = STATUS_ORDER.indexOf(video.status);
+            const statusOrder = video.is_photo ? STATUS_ORDER_PHOTO : STATUS_ORDER_VIDEO;
+            const statusIdx = statusOrder.indexOf(video.status);
             const progress =
               video.status === "failed"
                 ? 0
-                : ((statusIdx + 1) / STATUS_ORDER.length) * 100;
+                : ((statusIdx + 1) / statusOrder.length) * 100;
 
             return (
               <Card key={video.id}>
                 <CardContent className="py-5">
                   <div className="flex items-center justify-between mb-3">
-                    <div>
-                      <h3 className="font-medium text-sm">{video.filename}</h3>
-                      <p className="text-xs text-muted-foreground">
-                        {(video.size_bytes / (1024 * 1024)).toFixed(1)} MB
-                        {video.duration_seconds &&
-                          ` / ${Math.round(video.duration_seconds)}s`}
-                      </p>
+                    <div className="flex items-center gap-2">
+                      {video.is_photo && <Camera className="h-4 w-4 text-muted-foreground" />}
+                      <div>
+                        <h3 className="font-medium text-sm">{video.filename}</h3>
+                        <p className="text-xs text-muted-foreground">
+                          {(video.size_bytes / (1024 * 1024)).toFixed(1)} MB
+                          {video.duration_seconds &&
+                            ` / ${Math.round(video.duration_seconds)}s`}
+                        </p>
+                      </div>
                     </div>
                     <Badge
                       variant="outline"
@@ -180,7 +192,7 @@ export default function UploadsPage() {
                   />
 
                   <div className="flex justify-between mt-2">
-                    {STATUS_ORDER.map((s, i) => (
+                    {statusOrder.map((s, i) => (
                       <span
                         key={s}
                         className={`text-[10px] hidden sm:inline ${
@@ -191,7 +203,7 @@ export default function UploadsPage() {
                       </span>
                     ))}
                     <span className="sm:hidden text-[10px] text-muted-foreground">
-                      {statusIdx + 1}/{STATUS_ORDER.length}
+                      {statusIdx + 1}/{statusOrder.length}
                     </span>
                   </div>
 
