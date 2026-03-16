@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     const now = new Date();
     const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    const [videosRes, processingRes, reviewRes, publishedRes, eventsRes] =
+    const [videosRes, processingRes, reviewRes, approvedRes, publishedRes, eventsRes] =
       await Promise.all([
         supabase.from("videos").select("id", { count: "exact", head: true }),
         supabase
@@ -26,7 +26,11 @@ export async function GET(request: NextRequest) {
         supabase
           .from("content")
           .select("id", { count: "exact", head: true })
-          .eq("status", "published")
+          .eq("status", "approved"),
+        supabase
+          .from("content")
+          .select("id", { count: "exact", head: true })
+          .in("status", ["published", "partially_published"])
           .gte("published_at", weekAgo),
         supabase
           .from("events")
@@ -37,7 +41,7 @@ export async function GET(request: NextRequest) {
     const stats: DashboardStats = {
       total_videos: videosRes.count ?? 0,
       processing: processingRes.count ?? 0,
-      ready_for_review: reviewRes.count ?? 0,
+      ready_for_review: (reviewRes.count ?? 0) + (approvedRes.count ?? 0),
       published_this_week: publishedRes.count ?? 0,
       upcoming_events: eventsRes.count ?? 0,
     };

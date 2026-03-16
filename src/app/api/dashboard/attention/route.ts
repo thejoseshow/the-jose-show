@@ -68,23 +68,30 @@ export async function GET() {
   }
 
   // 4. Expiring tokens (within 7 days)
+  // Skip Google — its access token expires hourly but auto-refreshes via refresh_token
   const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
   const { data: expiringTokens } = await supabase
     .from("platform_tokens")
-    .select("id, platform, expires_at")
+    .select("id, platform, expires_at, refresh_token")
     .not("expires_at", "is", null)
     .lt("expires_at", sevenDaysFromNow);
 
   for (const t of expiringTokens || []) {
+    // Google auto-refreshes via refresh_token — only warn if refresh_token is missing
+    if (t.platform === "google" && t.refresh_token) continue;
+
     const expiresAt = new Date(t.expires_at);
     const daysLeft = Math.ceil((expiresAt.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
+    const authLink = t.platform === "google" ? "/api/auth/google"
+      : t.platform === "facebook" ? "/api/auth/meta"
+      : "/api/auth/tiktok";
     if (daysLeft <= 0) {
       items.push({
         type: "expiring_token",
         id: t.id,
         title: `${t.platform} token expired`,
         detail: "Reconnect to continue publishing",
-        link: "/api/auth/google",
+        link: authLink,
       });
     } else {
       items.push({
@@ -92,7 +99,7 @@ export async function GET() {
         id: t.id,
         title: `${t.platform} token expires in ${daysLeft} day(s)`,
         detail: "Reconnect soon to avoid interruption",
-        link: "/api/auth/google",
+        link: authLink,
       });
     }
   }
