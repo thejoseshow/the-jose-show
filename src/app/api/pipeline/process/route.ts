@@ -6,7 +6,7 @@ import { processVideo } from "@/lib/pipeline";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 900;
+export const maxDuration = 800;
 
 // POST /api/pipeline/process - Manual trigger (same logic as cron)
 export async function POST() {

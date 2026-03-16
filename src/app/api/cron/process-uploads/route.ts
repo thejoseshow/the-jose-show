@@ -7,7 +7,7 @@ import { withCronLog } from "@/lib/cron-logger";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 900;
+export const maxDuration = 800;
 
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
