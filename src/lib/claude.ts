@@ -42,6 +42,55 @@ PLATFORMS:
 
 Always write in Jose's authentic voice. Be energetic, warm, and proud of Dominican culture.`;
 
+/**
+ * Analyze video frames visually to understand what's happening in the video.
+ * Returns a scene description that supplements the transcript.
+ */
+export async function analyzeVideoFrames(
+  frames: Buffer[],
+  transcript: string
+): Promise<string> {
+  if (frames.length === 0) return "";
+
+  const client = getClient();
+
+  const imageContent = frames.map((frame) => ({
+    type: "image" as const,
+    source: {
+      type: "base64" as const,
+      media_type: "image/png" as const,
+      data: frame.toString("base64"),
+    },
+  }));
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 500,
+    messages: [
+      {
+        role: "user",
+        content: [
+          ...imageContent,
+          {
+            type: "text" as const,
+            text: `These are frames from a video by Jose (Dominican dancer/entertainer). The audio transcript is: "${transcript.slice(0, 500)}"
+
+Describe what's VISUALLY happening in these frames in 2-3 sentences. Focus on:
+- What is Jose doing? (dancing, talking, eating, at a bar, teaching, DJing, etc.)
+- Where is he? (studio, club, restaurant, outdoor, home, etc.)
+- Who else is in the scene? (alone, with wife, with students, crowd, etc.)
+- What's the vibe? (casual, energetic, romantic, fun, etc.)
+
+Be specific and factual about what you SEE.`,
+          },
+        ],
+      },
+    ],
+  });
+
+  return response.content.find((b) => b.type === "text")?.text || "";
+}
+
 export interface ClipRecommendation {
   start_time: number;
   end_time: number;
@@ -58,7 +107,8 @@ export interface ClipRecommendation {
 export async function analyzeTranscriptForClips(
   transcript: string,
   segments: TranscriptSegment[],
-  videoDuration: number
+  videoDuration: number,
+  visualContext?: string
 ): Promise<ClipRecommendation[]> {
   const client = getClient();
 
@@ -72,7 +122,7 @@ export async function analyzeTranscriptForClips(
         content: `Analyze this video transcript and find the best moments for short-form clips (30-60 seconds for TikTok/Instagram/Facebook, and the best longer segment up to 8 minutes for YouTube).
 
 VIDEO DURATION: ${videoDuration} seconds
-
+${visualContext ? `\nVISUAL CONTEXT (what's happening in the video): ${visualContext}\nIMPORTANT: Use this visual context to create accurate titles. If Jose is at a bar with his wife, title it about that — NOT about whatever song is playing in the background.\n` : ""}
 TRANSCRIPT WITH TIMESTAMPS:
 ${segments.map((s) => `[${formatTime(s.start)} - ${formatTime(s.end)}] ${s.text}`).join("\n")}
 
@@ -134,7 +184,8 @@ export async function generatePlatformCopy(
   clipTranscript: string,
   suggestedTitle: string,
   platforms: Platform[],
-  isSpanish = false
+  isSpanish = false,
+  visualContext?: string
 ): Promise<PlatformCopy> {
   const client = getClient();
 
@@ -153,8 +204,8 @@ ${clipTranscript}
 SUGGESTED TITLE: ${suggestedTitle}
 TARGET PLATFORMS: ${platforms.join(", ")}
 LANGUAGE: ${isSpanish ? "The video is primarily in SPANISH. Write captions in Spanish first, then add an English translation or mix. Make hashtags bilingual." : "The video is primarily in ENGLISH. Sprinkle in Dominican Spanish phrases naturally as Jose would."}
-
-IMPORTANT: If the transcript is song lyrics (not Jose talking), this is a DANCE clip. Write copy about Jose's dancing/footwork/vibes, NOT about the song lyrics. The title should reflect what Jose is DOING (practicing, dancing, performing footwork), not quote the song.
+${visualContext ? `\nVISUAL CONTEXT (what's actually happening in the video): ${visualContext}\nIMPORTANT: Use this visual description to write accurate captions. If Jose is at a bar with his wife, write about THAT — not whatever song is playing.\n` : ""}
+IMPORTANT: If the transcript is song lyrics (not Jose talking), this is NOT necessarily a dance clip — check the visual context. Write copy about what Jose is actually DOING, not about the song lyrics. The title should reflect what's happening visually.
 
 Available hashtag sets:
 - Bachata: ${HASHTAG_SETS.bachata.join(" ")}

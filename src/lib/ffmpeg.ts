@@ -187,6 +187,56 @@ export async function extractThumbnail(
 }
 
 /**
+ * Extract multiple evenly-spaced frames from a video for visual analysis.
+ * Returns an array of PNG buffers.
+ */
+export async function extractFrames(
+  videoBuffer: Buffer,
+  inputFilename: string,
+  duration: number,
+  count: number = 4
+): Promise<Buffer[]> {
+  const tmpDir = await mkdtemp(join(tmpdir(), "tjs-frames-"));
+  const inputPath = join(tmpDir, inputFilename);
+  const outputPattern = join(tmpDir, "frame_%03d.png");
+
+  try {
+    await writeFile(inputPath, videoBuffer);
+
+    // Calculate evenly-spaced timestamps (skip first/last 10%)
+    const start = duration * 0.1;
+    const end = duration * 0.9;
+    const interval = (end - start) / (count - 1);
+    const times = Array.from({ length: count }, (_, i) => start + i * interval);
+
+    const frames: Buffer[] = [];
+    for (let i = 0; i < times.length; i++) {
+      const framePath = join(tmpDir, `frame_${i}.png`);
+      await new Promise<void>((resolve, reject) => {
+        ffmpeg(inputPath)
+          .setStartTime(times[i])
+          .outputOptions(["-frames:v", "1", "-q:v", "2", "-vf", "scale=512:-1"])
+          .output(framePath)
+          .on("end", () => resolve())
+          .on("error", (err) => reject(err))
+          .run();
+      });
+      try {
+        const buf = await readFile(framePath);
+        frames.push(buf);
+        await unlink(framePath).catch(() => {});
+      } catch {
+        // Frame extraction failed for this timestamp, skip
+      }
+    }
+
+    return frames;
+  } finally {
+    await unlink(inputPath).catch(() => {});
+  }
+}
+
+/**
  * Extract audio from video as compressed mp3 (for Whisper API 25MB limit).
  */
 export async function extractAudio(

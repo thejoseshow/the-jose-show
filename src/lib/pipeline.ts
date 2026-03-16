@@ -1,8 +1,8 @@
 import { supabase } from "./supabase";
 import { downloadFile, getFileMetadata } from "./google-drive";
 import { transcribeVideo, generateSRT, getSegmentsInRange } from "./whisper";
-import { extractClip, getVideoDuration, extractThumbnail } from "./ffmpeg";
-import { analyzeTranscriptForClips, generatePlatformCopy, generateThumbnailPrompt } from "./claude";
+import { extractClip, getVideoDuration, extractThumbnail, extractFrames } from "./ffmpeg";
+import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt } from "./claude";
 import { generateThumbnail } from "./thumbnails";
 import { uploadClip, uploadThumbnail } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
@@ -98,11 +98,23 @@ export async function processVideo(video: Video): Promise<void> {
     const segments = video.transcript_segments || [];
     const duration = video.duration_seconds || 0;
 
-    // Ask Claude to recommend clips
+    // Extract frames for visual analysis
+    let visualContext = "";
+    try {
+      const frames = await extractFrames(videoBuffer, video.filename, duration, 4);
+      if (frames.length > 0) {
+        visualContext = await withRetry(() => analyzeVideoFrames(frames, video.transcript || ""), { label: "Visual analysis" });
+      }
+    } catch (err) {
+      console.error("Visual analysis failed (non-critical):", err);
+    }
+
+    // Ask Claude to recommend clips (now with visual context)
     let recommendations = await withRetry(() => analyzeTranscriptForClips(
       video.transcript || "",
       segments,
-      duration
+      duration,
+      visualContext
     ), { label: "Claude clip analysis" });
 
     // For short videos (<90s), limit to 1 clip to stay within Vercel timeout
@@ -116,7 +128,7 @@ export async function processVideo(video: Video): Promise<void> {
 
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video
-      await createFullVideoContent(video, videoBuffer, isSpanish, contentStatus);
+      await createFullVideoContent(video, videoBuffer, isSpanish, contentStatus, visualContext);
       await updateStatus(videoId, "clipped");
       return;
     }
@@ -164,12 +176,13 @@ export async function processVideo(video: Video): Promise<void> {
           .select()
           .single();
 
-        // Generate platform copy (bilingual if video is in Spanish)
+        // Generate platform copy (bilingual if video is in Spanish, with visual context)
         const copy = await withRetry(() => generatePlatformCopy(
           clipTranscript,
           rec.suggested_title,
           rec.platforms,
-          isSpanish
+          isSpanish,
+          visualContext
         ), { label: "Claude copy generation" });
 
         // Generate thumbnail for YouTube clips
@@ -270,7 +283,7 @@ export async function processVideo(video: Video): Promise<void> {
  * Used when Claude doesn't find specific clip-worthy moments,
  * or the video is short enough to post as-is.
  */
-async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review") {
+async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review", visualContext = "") {
   const transcript = video.transcript || "";
   const duration = video.duration_seconds || 0;
 
@@ -296,7 +309,8 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     transcript.slice(0, 1000),
     titleHint,
     platforms,
-    isSpanish
+    isSpanish,
+    visualContext
   );
 
   const title = copy.youtube_title || titleHint;
