@@ -5,7 +5,7 @@ import { processVideo } from "@/lib/pipeline";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 // POST /api/webhooks/google-drive - Google Drive push notification
 // Set up via Drive API watch: drive.files.watch()

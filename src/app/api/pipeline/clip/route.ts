@@ -7,7 +7,7 @@ import { clipSchema, sanitizeError, validateBody } from "@/lib/validation";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import type { TranscriptSegment } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 // POST /api/pipeline/clip - Manually extract a clip from a video
 export async function POST(request: NextRequest) {

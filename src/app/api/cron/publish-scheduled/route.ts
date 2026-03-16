@@ -4,7 +4,7 @@ import { supabase } from "@/lib/supabase";
 import { publishContent } from "@/lib/publish";
 import { withCronLog } from "@/lib/cron-logger";
 
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {

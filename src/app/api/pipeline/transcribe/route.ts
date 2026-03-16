@@ -4,7 +4,7 @@ import { transcribeVideo } from "@/lib/whisper";
 import { transcribeSchema, sanitizeError, validateBody } from "@/lib/validation";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 // POST /api/pipeline/transcribe - Manually trigger transcription for a video
 export async function POST(request: NextRequest) {

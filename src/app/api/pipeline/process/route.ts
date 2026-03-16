@@ -6,7 +6,7 @@ import { processVideo } from "@/lib/pipeline";
 import { MAX_VIDEO_SIZE_BYTES } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 900;
 
 // POST /api/pipeline/process - Manual trigger (same logic as cron)
 export async function POST() {
@@ -35,13 +35,13 @@ export async function POST() {
       if (!error) newRecords++;
     }
 
-    // Step 2: Process pending videos (up to 2 for manual trigger)
+    // Step 2: Process pending videos (up to 5 for manual trigger)
     const { data: pendingVideos } = await supabase
       .from("videos")
       .select("*")
       .in("status", ["new", "downloaded", "transcribed"])
       .order("created_at", { ascending: true })
-      .limit(2);
+      .limit(5);
 
     let processed = 0;
     const errors: string[] = [];

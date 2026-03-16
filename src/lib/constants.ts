@@ -38,8 +38,8 @@ export const PLATFORM_LIMITS = {
   },
 } as const;
 
-// Upload limits for Vercel processing
-export const MAX_VIDEO_SIZE_MB = 200;
+// Upload limits for Vercel processing (Pro plan: 500MB, 15-min timeout)
+export const MAX_VIDEO_SIZE_MB = 500;
 export const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
 
 // Clip extraction defaults
