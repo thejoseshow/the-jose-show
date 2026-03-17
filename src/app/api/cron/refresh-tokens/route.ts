@@ -58,6 +58,24 @@ export async function GET(request: NextRequest) {
       await notifyPipelineError("TikTok Token Refresh", errorMsg).catch(console.error);
     }
 
+    // Renew Google Drive push webhook (expires every ~24hrs)
+    try {
+      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL;
+      const adminSecret = process.env.ADMIN_SECRET;
+      if (siteUrl && adminSecret) {
+        const watchRes = await fetch(`${siteUrl}/api/admin/setup-drive-watch`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${adminSecret}`, "Content-Type": "application/json" },
+        });
+        const watchData = await watchRes.json();
+        results.drive_watch = { refreshed: watchData.success, error: watchData.success ? undefined : watchData.error };
+      } else {
+        results.drive_watch = { refreshed: false, error: "Missing NEXT_PUBLIC_SITE_URL or ADMIN_SECRET" };
+      }
+    } catch (err) {
+      results.drive_watch = { refreshed: false, error: err instanceof Error ? err.message : "Unknown error" };
+    }
+
     results.google = { refreshed: false };
     return results;
   });
