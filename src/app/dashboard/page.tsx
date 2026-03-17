@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
-import { Video, RefreshCw, Eye, CheckCircle, AlertTriangle, Sparkles, Clock, Lightbulb } from "lucide-react";
+import { Video, RefreshCw, Eye, CheckCircle, AlertTriangle, Sparkles, Clock, Lightbulb, CalendarClock } from "lucide-react";
 import type { DashboardStats, ContentListItem, Platform } from "@/lib/types";
 
 interface PostingTime {
@@ -40,23 +40,27 @@ export default function DashboardPage() {
   const [attentionItems, setAttentionItems] = useState<AttentionItem[]>([]);
   const [postingTimes, setPostingTimes] = useState<PostingTime[]>([]);
   const [contentIdeas, setContentIdeas] = useState<ContentIdea[]>([]);
+  const [upcomingPosts, setUpcomingPosts] = useState<ContentListItem[]>([]);
   const [suggestionsLoading, setSuggestionsLoading] = useState(true);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     async function load() {
       try {
-        const [statsRes, contentRes, attentionRes] = await Promise.all([
+        const [statsRes, contentRes, attentionRes, upcomingRes] = await Promise.all([
           fetch("/api/content?stats=true"),
           fetch("/api/content?limit=5&sort=created_at"),
           fetch("/api/dashboard/attention"),
+          fetch("/api/content?status=approved&scheduled=upcoming&limit=5"),
         ]);
         const statsData = await statsRes.json();
         const contentData = await contentRes.json();
         const attentionData = await attentionRes.json();
+        const upcomingData = await upcomingRes.json();
         if (statsData.success) setStats(statsData.data);
         if (contentData.success) setRecentContent(contentData.data || []);
         if (attentionData.success) setAttentionItems(attentionData.data || []);
+        if (upcomingData.success) setUpcomingPosts(upcomingData.data || []);
       } catch (err) {
         console.error("Failed to load dashboard:", err);
       } finally {
@@ -212,6 +216,48 @@ export default function DashboardPage() {
           </Card>
         )}
       </div>
+
+      {/* Upcoming Scheduled Posts */}
+      {upcomingPosts.length > 0 && (
+        <div>
+          <div className="flex items-center gap-2 mb-3">
+            <CalendarClock className="w-5 h-5 text-blue-400" />
+            <h2 className="text-lg font-semibold">Upcoming Scheduled</h2>
+            <Badge variant="secondary" className="text-xs">{upcomingPosts.length}</Badge>
+          </div>
+          <Card className="divide-y divide-border">
+            {upcomingPosts.map((item) => (
+              <Link
+                key={item.id}
+                href={`/dashboard/content/${item.id}`}
+                className="flex items-center gap-4 p-3 hover:bg-accent/50 transition-colors"
+              >
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium truncate">{item.title}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {item.scheduled_at
+                      ? new Date(item.scheduled_at).toLocaleString("en-US", {
+                          weekday: "short",
+                          month: "short",
+                          day: "numeric",
+                          hour: "numeric",
+                          minute: "2-digit",
+                        })
+                      : "Not scheduled"}
+                  </p>
+                </div>
+                <div className="flex gap-1">
+                  {item.platforms.map((p) => (
+                    <Badge key={p} variant="secondary" className="text-[10px] px-1.5">
+                      {p}
+                    </Badge>
+                  ))}
+                </div>
+              </Link>
+            ))}
+          </Card>
+        </div>
+      )}
 
       {/* Bottom Row */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

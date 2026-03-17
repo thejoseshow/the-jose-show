@@ -30,7 +30,7 @@ export interface CaptionWord {
   endFrame: number;
 }
 
-export type CaptionStyle = "default" | "highlight" | "karaoke";
+export type CaptionStyle = "default" | "highlight" | "karaoke" | "pop" | "gradient" | "boxed";
 
 export interface CaptionOverlayProps {
   clipUrl: string;

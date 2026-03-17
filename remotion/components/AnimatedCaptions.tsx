@@ -1,5 +1,5 @@
 import React from "react";
-import { useCurrentFrame, interpolate } from "remotion";
+import { useCurrentFrame, interpolate, spring, useVideoConfig } from "remotion";
 import { BRAND_ACCENT, DR_RED } from "../lib/constants";
 import { FONT_BOLD } from "../lib/fonts";
 import type { CaptionWord, CaptionStyle } from "../lib/types";
@@ -67,6 +67,8 @@ const CaptionWordSpan: React.FC<{
   fontSize: number;
   frame: number;
 }> = ({ word, isActive, isPast, style: captionStyle, fontSize, frame }) => {
+  const { fps } = useVideoConfig();
+
   // Default style: fade in
   if (captionStyle === "default") {
     const opacity = isActive || isPast ? 1 : 0.4;
@@ -119,7 +121,82 @@ const CaptionWordSpan: React.FC<{
     );
   }
 
-  // Karaoke style: color change
+  // Pop style: TikTok bounce
+  if (captionStyle === "pop") {
+    const scale = isActive
+      ? spring({ frame: frame - word.startFrame, fps, config: { damping: 8, stiffness: 200 }, from: 0.5, to: 1.2 })
+      : isPast ? 1 : 0.8;
+    return (
+      <span
+        style={{
+          fontSize,
+          fontFamily: FONT_BOLD,
+          fontWeight: 900,
+          color: "#FFFFFF",
+          background: isActive ? BRAND_ACCENT : isPast ? "rgba(255,215,0,0.2)" : "transparent",
+          padding: isActive ? "2px 10px" : "2px 6px",
+          borderRadius: 12,
+          transform: `scale(${scale})`,
+          textShadow: "0 2px 6px rgba(0,0,0,0.8)",
+          display: "inline-block",
+        }}
+      >
+        {word.text}
+      </span>
+    );
+  }
+
+  // Gradient style: color sweep
+  if (captionStyle === "gradient") {
+    const progress = isActive
+      ? interpolate(frame, [word.startFrame, word.endFrame], [0, 100], { extrapolateRight: "clamp" })
+      : isPast ? 100 : 0;
+    const color = isPast ? BRAND_ACCENT : isActive ? "#FFFFFF" : "rgba(255,255,255,0.5)";
+    return (
+      <span
+        style={{
+          fontSize,
+          fontFamily: FONT_BOLD,
+          fontWeight: 900,
+          background: isActive
+            ? `linear-gradient(90deg, ${BRAND_ACCENT} ${progress}%, #FFFFFF ${progress}%)`
+            : undefined,
+          WebkitBackgroundClip: isActive ? "text" : undefined,
+          WebkitTextFillColor: isActive ? "transparent" : undefined,
+          color: isActive ? undefined : color,
+          filter: "drop-shadow(0 2px 4px rgba(0,0,0,0.8))",
+          display: "inline-block",
+        }}
+      >
+        {word.text}
+      </span>
+    );
+  }
+
+  // Boxed style: Netflix style
+  if (captionStyle === "boxed") {
+    return (
+      <span
+        style={{
+          fontSize,
+          fontFamily: FONT_BOLD,
+          fontWeight: 900,
+          color: "#FFFFFF",
+          background: isActive
+            ? "rgba(0,0,0,0.85)"
+            : isPast ? "rgba(0,0,0,0.4)" : "transparent",
+          padding: "4px 10px",
+          borderRadius: 6,
+          display: "inline-block",
+          textShadow: "0 1px 3px rgba(0,0,0,0.6)",
+        }}
+      >
+        {word.text}
+      </span>
+    );
+  }
+
+  // Karaoke style: color change (default fallback)
   const color = isActive ? BRAND_ACCENT : isPast ? DR_RED : "#FFFFFF88";
   const scale = isActive ? 1.15 : 1;
 

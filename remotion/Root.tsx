@@ -44,7 +44,7 @@ const captionOverlaySchema = z.object({
   clipUrl: z.string(),
   clipDurationInFrames: z.number(),
   words: z.array(captionWordSchema),
-  captionStyle: z.enum(["default", "highlight", "karaoke"]),
+  captionStyle: z.enum(["default", "highlight", "karaoke", "pop", "gradient", "boxed"]),
 });
 
 export const RemotionRoot: React.FC = () => {

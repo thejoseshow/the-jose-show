@@ -19,8 +19,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Loader2, Trash2, HardDrive } from "lucide-react";
+import { Loader2, Trash2, HardDrive, Clock } from "lucide-react";
 
 interface StorageStats {
   total_files: number;
@@ -90,6 +92,15 @@ export default function SettingsPage() {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [cleaningUp, setCleaningUp] = useState(false);
   const [autoApprove, setAutoApprove] = useState(false);
+  const [autoApproveThreshold, setAutoApproveThreshold] = useState(7);
+  const [autoSchedule, setAutoSchedule] = useState(false);
+  const [optimalTimes, setOptimalTimes] = useState<Array<{ platform: string; hour: number; avgEngagement: number; sampleSize: number }>>([]);
+  const [preferredTimes, setPreferredTimes] = useState<Record<string, { hour: number; minute: number }>>({
+    youtube: { hour: 14, minute: 0 },
+    facebook: { hour: 11, minute: 0 },
+    instagram: { hour: 18, minute: 0 },
+    tiktok: { hour: 19, minute: 0 },
+  });
   const [autoApproveLoading, setAutoApproveLoading] = useState(true);
 
   const fetchConnections = useCallback(async () => {
@@ -119,6 +130,18 @@ export default function SettingsPage() {
       const data = await res.json();
       if (data.success) {
         setAutoApprove(data.data?.auto_approve_pipeline === true);
+        if (data.data?.auto_approve_threshold != null) {
+          setAutoApproveThreshold(Number(data.data.auto_approve_threshold));
+        }
+        if (data.data?.auto_schedule_enabled != null) {
+          setAutoSchedule(data.data.auto_schedule_enabled === true || data.data.auto_schedule_enabled === "true");
+        }
+        if (data.data?.preferred_post_times) {
+          const parsed = typeof data.data.preferred_post_times === "string"
+            ? JSON.parse(data.data.preferred_post_times)
+            : data.data.preferred_post_times;
+          setPreferredTimes(parsed);
+        }
       }
     } catch {
       // Settings are non-critical
@@ -126,11 +149,22 @@ export default function SettingsPage() {
     setAutoApproveLoading(false);
   }, []);
 
+  const fetchOptimalTimes = useCallback(async () => {
+    try {
+      const res = await fetch("/api/analytics/optimal-times");
+      const data = await res.json();
+      if (data.success) setOptimalTimes(data.data || []);
+    } catch {
+      // Non-critical
+    }
+  }, []);
+
   useEffect(() => {
     fetchConnections();
     fetchStorageStats();
     fetchSettings();
-  }, [fetchConnections, fetchStorageStats, fetchSettings]);
+    fetchOptimalTimes();
+  }, [fetchConnections, fetchStorageStats, fetchSettings, fetchOptimalTimes]);
 
   async function handleDisconnect(platform: string) {
     setDisconnecting(platform);
@@ -189,6 +223,54 @@ export default function SettingsPage() {
     } catch {
       setAutoApprove(!checked);
       toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleThresholdChange(value: number) {
+    setAutoApproveThreshold(value);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_approve_threshold: value }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleAutoScheduleToggle(checked: boolean) {
+    setAutoSchedule(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_schedule_enabled: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "Auto-schedule enabled" : "Auto-schedule disabled");
+      } else {
+        setAutoSchedule(!checked);
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setAutoSchedule(!checked);
+      toast.error("Failed to update setting");
+    }
+  }
+
+  async function handlePreferredTimeChange(platform: string, hour: number) {
+    const updated = { ...preferredTimes, [platform]: { ...preferredTimes[platform], hour } };
+    setPreferredTimes(updated);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preferred_post_times: updated }),
+      });
+    } catch {
+      // Non-critical
     }
   }
 
@@ -418,23 +500,107 @@ export default function SettingsPage() {
       {/* Automation */}
       <div>
         <h2 className="text-lg font-semibold text-white mb-4">Automation</h2>
-        <Card>
-          <CardContent className="pt-5">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-sm font-medium">Auto-Approve Content</p>
-                <p className="text-xs text-muted-foreground">
-                  Skip manual review — content goes straight to &quot;approved&quot; after processing
-                </p>
+        <div className="space-y-4">
+          <Card>
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Auto-Approve Content</p>
+                  <p className="text-xs text-muted-foreground">
+                    Skip manual review — content goes straight to &quot;approved&quot; after processing
+                  </p>
+                </div>
+                {autoApproveLoading ? (
+                  <Skeleton className="h-5 w-10" />
+                ) : (
+                  <Switch checked={autoApprove} onCheckedChange={handleAutoApproveToggle} />
+                )}
               </div>
-              {autoApproveLoading ? (
-                <Skeleton className="h-5 w-10" />
-              ) : (
-                <Switch checked={autoApprove} onCheckedChange={handleAutoApproveToggle} />
+
+              {autoApprove && (
+                <>
+                  <Separator />
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">
+                        Confidence Threshold: <span className="font-bold text-white">{autoApproveThreshold}/10</span>
+                      </Label>
+                    </div>
+                    <input
+                      type="range"
+                      min={1}
+                      max={10}
+                      value={autoApproveThreshold}
+                      onChange={(e) => handleThresholdChange(parseInt(e.target.value))}
+                      className="w-full accent-red-500"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Only auto-approve clips with AI score &ge; {autoApproveThreshold}. Lower scores go to review.
+                    </p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium">Auto-Schedule</p>
+                      <p className="text-xs text-muted-foreground">
+                        Automatically schedule approved content at optimal posting times
+                      </p>
+                    </div>
+                    <Switch checked={autoSchedule} onCheckedChange={handleAutoScheduleToggle} />
+                  </div>
+                </>
               )}
-            </div>
-          </CardContent>
-        </Card>
+            </CardContent>
+          </Card>
+
+          {/* Optimal Posting Times */}
+          <Card>
+            <CardContent className="pt-5 space-y-4">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-blue-400" />
+                <p className="text-sm font-medium">Optimal Posting Times</p>
+              </div>
+
+              {optimalTimes.length > 0 && (
+                <div className="space-y-2">
+                  <p className="text-xs text-muted-foreground">Detected from your analytics:</p>
+                  {optimalTimes.map((t) => (
+                    <div key={t.platform} className="flex items-center justify-between text-sm">
+                      <span className="capitalize text-muted-foreground">{t.platform}</span>
+                      <span className="text-xs">
+                        {t.hour > 12 ? `${t.hour - 12}:00 PM` : `${t.hour}:00 AM`} UTC
+                        {t.sampleSize > 0 && (
+                          <span className="text-muted-foreground/60 ml-1">({t.sampleSize} samples)</span>
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <Separator />
+
+              <div className="space-y-3">
+                <p className="text-xs text-muted-foreground">Override preferred times (UTC):</p>
+                {(["youtube", "facebook", "instagram", "tiktok"] as const).map((platform) => (
+                  <div key={platform} className="flex items-center justify-between">
+                    <Label className="text-sm capitalize text-muted-foreground">{platform}</Label>
+                    <Input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={preferredTimes[platform]?.hour ?? 12}
+                      onChange={(e) => handlePreferredTimeChange(platform, parseInt(e.target.value) || 0)}
+                      className="w-20 text-center"
+                    />
+                  </div>
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
       </div>
     </div>
   );

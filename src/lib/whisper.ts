@@ -1,6 +1,6 @@
 import OpenAI from "openai";
 import { extractAudio } from "./ffmpeg";
-import type { TranscriptSegment } from "./types";
+import type { TranscriptSegment, WordTimestamp } from "./types";
 
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25MB
 
@@ -13,6 +13,7 @@ function getOpenAI() {
 export interface TranscriptionResult {
   text: string;
   segments: TranscriptSegment[];
+  words: WordTimestamp[];
   language: string;
   duration: number;
   isSpanish: boolean;
@@ -47,7 +48,7 @@ export async function transcribeVideo(
     model: "whisper-1",
     file,
     response_format: "verbose_json",
-    timestamp_granularities: ["segment"],
+    timestamp_granularities: ["word", "segment"],
   });
 
   // Extract segments with timestamps
@@ -60,12 +61,23 @@ export async function transcribeVideo(
     text: seg.text.trim(),
   }));
 
+  // Extract word-level timestamps
+  const words: WordTimestamp[] = (
+    (response as unknown as { words?: Array<{ word: string; start: number; end: number }> })
+      .words || []
+  ).map((w) => ({
+    word: w.word.trim(),
+    start: w.start,
+    end: w.end,
+  }));
+
   const detectedLang =
     (response as unknown as { language?: string }).language || "en";
 
   return {
     text: response.text,
     segments,
+    words,
     language: detectedLang,
     duration:
       (response as unknown as { duration?: number }).duration ||
@@ -101,6 +113,23 @@ export function getSegmentsInRange(
       start: Math.max(0, seg.start - startTime),
       end: Math.min(endTime - startTime, seg.end - startTime),
       text: seg.text,
+    }));
+}
+
+/**
+ * Get words within a time range (for clip-specific word timestamps).
+ */
+export function getWordsInRange(
+  words: WordTimestamp[],
+  startTime: number,
+  endTime: number
+): WordTimestamp[] {
+  return words
+    .filter((w) => w.end > startTime && w.start < endTime)
+    .map((w) => ({
+      word: w.word,
+      start: Math.max(0, w.start - startTime),
+      end: Math.min(endTime - startTime, w.end - startTime),
     }));
 }
 

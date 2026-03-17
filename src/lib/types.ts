@@ -44,6 +44,7 @@ export interface Video {
   storage_path: string | null;
   transcript: string | null;
   transcript_segments: TranscriptSegment[] | null;
+  word_timestamps: WordTimestamp[] | null;
   language: string | null;
   is_photo: boolean;
   status: VideoStatus;
@@ -59,6 +60,12 @@ export interface TranscriptSegment {
   text: string;
 }
 
+export interface WordTimestamp {
+  word: string;
+  start: number;
+  end: number;
+}
+
 export interface Clip {
   id: string;
   video_id: string;
@@ -69,6 +76,7 @@ export interface Clip {
   duration_seconds: number;
   aspect_ratio: "9:16" | "16:9" | "1:1";
   srt_captions: string | null;
+  word_timestamps: WordTimestamp[] | null;
   ai_score: number | null;
   ai_reasoning: string | null;
   created_at: string;
@@ -201,6 +209,20 @@ export interface RenderJob {
   error_message: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface PerformanceInsight {
+  id: string;
+  week_start: string;
+  insights_json: {
+    top_insights: string[];
+    content_type_rankings: Array<{ type: string; avg_engagement: number }>;
+    platform_rankings: Array<{ platform: string; total_views: number; avg_engagement: number }>;
+    recommended_hashtags: string[];
+    suggested_content_ideas: string[];
+    week_summary: string;
+  };
+  created_at: string;
 }
 
 // --- API / UI Types ---

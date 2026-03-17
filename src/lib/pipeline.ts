@@ -1,6 +1,6 @@
 import { supabase } from "./supabase";
 import { downloadFile, getFileMetadata } from "./google-drive";
-import { transcribeVideo, generateSRT, getSegmentsInRange } from "./whisper";
+import { transcribeVideo, generateSRT, getSegmentsInRange, getWordsInRange } from "./whisper";
 import { extractClip, getVideoDuration, extractThumbnail, extractFrames, convertHeicToJpeg } from "./ffmpeg";
 import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt, analyzePhotoContent } from "./claude";
 import { generateThumbnail } from "./thumbnails";
@@ -9,6 +9,7 @@ import { notifyContentReady, notifyPipelineError } from "./notifications";
 import { withRetry } from "./retry";
 import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
 import { getAppSetting } from "./settings";
+import { getNextOptimalSlot } from "./optimal-times";
 import type { Video, Platform } from "./types";
 
 const MAX_RETRIES = 3;
@@ -73,6 +74,7 @@ export async function processVideo(video: Video): Promise<void> {
         .update({
           transcript: transcription.text,
           transcript_segments: transcription.segments,
+          word_timestamps: transcription.words,
           duration_seconds: transcription.duration || video.duration_seconds,
           language: transcription.language,
           status: "transcribed",
@@ -85,6 +87,7 @@ export async function processVideo(video: Video): Promise<void> {
         ...video,
         transcript: transcription.text,
         transcript_segments: transcription.segments,
+        word_timestamps: transcription.words,
         duration_seconds: transcription.duration || video.duration_seconds,
         status: "transcribed",
       };
@@ -122,18 +125,22 @@ export async function processVideo(video: Video): Promise<void> {
       recommendations = [recommendations.sort((a, b) => b.score - a.score)[0]];
     }
 
-    // Check if auto-approve is enabled
+    // Check auto-approve settings
     const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
-    const contentStatus = autoApprove === true ? "approved" : "review";
+    const autoApproveThreshold = await getAppSetting<number>("auto_approve_threshold") ?? 7;
+    const autoScheduleEnabled = await getAppSetting<boolean>("auto_schedule_enabled");
+    const defaultContentStatus = autoApprove === true ? "approved" : "review";
 
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video
-      await createFullVideoContent(video, videoBuffer, isSpanish, contentStatus, visualContext);
+      await createFullVideoContent(video, videoBuffer, isSpanish, defaultContentStatus, visualContext);
       await updateStatus(videoId, "clipped");
       return;
     }
 
     let contentCreated = 0;
+
+    const videoWords = video.word_timestamps || [];
 
     for (const rec of recommendations) {
       try {
@@ -141,6 +148,7 @@ export async function processVideo(video: Video): Promise<void> {
         const clipSegments = getSegmentsInRange(segments, rec.start_time, rec.end_time);
         const clipSRT = generateSRT(clipSegments);
         const clipTranscript = clipSegments.map((s) => s.text).join(" ");
+        const clipWords = getWordsInRange(videoWords, rec.start_time, rec.end_time);
 
         // Determine if this is a YouTube full-length or short-form clip
         const clipDuration = rec.end_time - rec.start_time;
@@ -170,6 +178,7 @@ export async function processVideo(video: Video): Promise<void> {
             duration_seconds: clipResult.duration,
             aspect_ratio: clipResult.aspectRatio,
             srt_captions: clipSRT,
+            word_timestamps: clipWords.length > 0 ? clipWords : null,
             ai_score: rec.score,
             ai_reasoning: rec.reasoning,
           })
@@ -213,6 +222,17 @@ export async function processVideo(video: Video): Promise<void> {
           }
         }
 
+        // Threshold-based auto-approve: only auto-approve if score meets threshold
+        const meetsThreshold = autoApprove === true && rec.score >= autoApproveThreshold;
+        const contentStatus = meetsThreshold ? "approved" : defaultContentStatus === "approved" ? "approved" : "review";
+
+        // Auto-schedule if enabled and content is approved
+        let scheduledAt: string | null = null;
+        if (meetsThreshold && autoScheduleEnabled === true) {
+          const slot = await getNextOptimalSlot(rec.platforms).catch(() => null);
+          if (slot) scheduledAt = slot.toISOString();
+        }
+
         // Create content record
         await supabase.from("content").insert({
           clip_id: clipRecord?.id || null,
@@ -229,6 +249,7 @@ export async function processVideo(video: Video): Promise<void> {
           media_url: clipUrl,
           thumbnail_url: thumbnailUrl,
           platforms: rec.platforms,
+          scheduled_at: scheduledAt,
         });
 
         contentCreated++;

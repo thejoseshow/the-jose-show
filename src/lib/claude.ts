@@ -490,6 +490,110 @@ Respond with ONLY the image generation prompt (1-2 sentences, no quotes).`,
     `Bold colorful YouTube thumbnail for "${title}", Dominican culture theme, energetic, eye-catching`;
 }
 
+/**
+ * Generate weekly performance insights using Claude.
+ */
+export async function generateWeeklyInsights(
+  snapshots: Array<{
+    content_id: string;
+    platform: string;
+    views: number;
+    likes: number;
+    comments: number;
+    shares: number;
+    watch_time_seconds: number | null;
+  }>,
+  contentData: Array<{
+    id: string;
+    title: string;
+    type: string;
+    platforms: string[];
+    published_at: string | null;
+  }>
+): Promise<{
+  top_insights: string[];
+  content_type_rankings: Array<{ type: string; avg_engagement: number }>;
+  platform_rankings: Array<{ platform: string; total_views: number; avg_engagement: number }>;
+  recommended_hashtags: string[];
+  suggested_content_ideas: string[];
+  week_summary: string;
+}> {
+  const client = getClient();
+
+  const totalViews = snapshots.reduce((sum, s) => sum + s.views, 0);
+  const totalLikes = snapshots.reduce((sum, s) => sum + s.likes, 0);
+  const totalComments = snapshots.reduce((sum, s) => sum + s.comments, 0);
+  const totalShares = snapshots.reduce((sum, s) => sum + s.shares, 0);
+
+  const response = await client.messages.create({
+    model: MODEL,
+    max_tokens: 2048,
+    system: `You are a social media performance coach for "The Jose Show" hosted by Jose Gomez. Jose is a Dominican dancer, DJ, event host, and content creator based in South Florida. His content includes bachata dancing/footwork, events (Muevete Brunch), vlogs, family content, and DJ sets. Analyze the data and provide actionable, specific insights.`,
+    messages: [
+      {
+        role: "user",
+        content: `Analyze this week's social media performance for The Jose Show.
+
+METRICS SUMMARY:
+- Total Views: ${totalViews}
+- Total Likes: ${totalLikes}
+- Total Comments: ${totalComments}
+- Total Shares: ${totalShares}
+- Content Published: ${contentData.length} pieces
+
+PER-PLATFORM BREAKDOWN:
+${["youtube", "facebook", "instagram", "tiktok"]
+  .map((p) => {
+    const platSnaps = snapshots.filter((s) => s.platform === p);
+    const views = platSnaps.reduce((s, x) => s + x.views, 0);
+    const likes = platSnaps.reduce((s, x) => s + x.likes, 0);
+    return `${p}: ${views} views, ${likes} likes`;
+  })
+  .join("\n")}
+
+PUBLISHED CONTENT:
+${contentData
+  .map((c) => `- "${c.title}" (${c.type}, ${c.platforms.join("/")})`)
+  .join("\n") || "No content published this week"}
+
+Respond ONLY with JSON:
+{
+  "top_insights": ["insight 1", "insight 2", "insight 3"],
+  "content_type_rankings": [{"type": "dance", "avg_engagement": 5.2}],
+  "platform_rankings": [{"platform": "instagram", "total_views": 1000, "avg_engagement": 4.5}],
+  "recommended_hashtags": ["#bachata", "#dominican"],
+  "suggested_content_ideas": ["idea 1", "idea 2", "idea 3"],
+  "week_summary": "One paragraph summary of the week's performance"
+}`,
+      },
+    ],
+  });
+
+  const text = response.content.find((b) => b.type === "text")?.text || "{}";
+  const jsonMatch = text.match(/\{[\s\S]*\}/);
+
+  try {
+    const parsed = JSON.parse(jsonMatch?.[0] || "{}");
+    return {
+      top_insights: parsed.top_insights || [],
+      content_type_rankings: parsed.content_type_rankings || [],
+      platform_rankings: parsed.platform_rankings || [],
+      recommended_hashtags: parsed.recommended_hashtags || [],
+      suggested_content_ideas: parsed.suggested_content_ideas || [],
+      week_summary: parsed.week_summary || "No data available for analysis.",
+    };
+  } catch {
+    return {
+      top_insights: ["Unable to generate insights from available data"],
+      content_type_rankings: [],
+      platform_rankings: [],
+      recommended_hashtags: [],
+      suggested_content_ideas: [],
+      week_summary: "Insufficient data for analysis this week.",
+    };
+  }
+}
+
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);

@@ -32,7 +32,12 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { ArrowLeft, Loader2, Trash2, Wand2, Video, RefreshCw } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
-import type { Content, ContentTemplate, Platform, PublishLog, RenderJob } from "@/lib/types";
+import {
+  convertWordTimestampsToFrames,
+  convertSegmentsToWords,
+  parseSRTToSegments,
+} from "@/lib/caption-utils";
+import type { Content, ContentTemplate, Platform, PublishLog, RenderJob, Clip } from "@/lib/types";
 
 export default function ContentDetailPage({
   params,
@@ -245,6 +250,21 @@ export default function ContentDetailPage({
     setGenerating(false);
   }
 
+  function getCaptionWords(): Array<{ text: string; startFrame: number; endFrame: number }> {
+    // Try to get words from the content's clip data
+    const contentWithClip = content as Content & { clips?: Clip[] };
+    const clip = contentWithClip.clips?.[0];
+
+    if (clip?.word_timestamps && clip.word_timestamps.length > 0) {
+      return convertWordTimestampsToFrames(clip.word_timestamps);
+    }
+    if (clip?.srt_captions) {
+      const segments = parseSRTToSegments(clip.srt_captions);
+      if (segments.length > 0) return convertSegmentsToWords(segments);
+    }
+    return [];
+  }
+
   async function handleGenerateVideo(compositionId: string) {
     if (!content) return;
     setRendering(true);
@@ -265,7 +285,7 @@ export default function ContentDetailPage({
             ? {
                 clipUrl: content.media_url || "",
                 clipDurationInFrames: 150,
-                words: [],
+                words: getCaptionWords(),
                 captionStyle,
               }
             : {};
@@ -598,6 +618,9 @@ export default function ContentDetailPage({
                     <SelectItem value="default">Default (Fade In)</SelectItem>
                     <SelectItem value="highlight">Highlight (Yellow Sweep)</SelectItem>
                     <SelectItem value="karaoke">Karaoke (Color Change)</SelectItem>
+                    <SelectItem value="pop">Pop (TikTok Bounce)</SelectItem>
+                    <SelectItem value="gradient">Gradient (Color Sweep)</SelectItem>
+                    <SelectItem value="boxed">Boxed (Netflix Style)</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button
