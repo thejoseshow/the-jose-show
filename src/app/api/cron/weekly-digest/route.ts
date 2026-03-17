@@ -5,6 +5,7 @@ import { supabase } from "@/lib/supabase";
 import { generateWeeklyInsights } from "@/lib/claude";
 import { notifyWeeklyDigest } from "@/lib/notifications";
 import { getOptimalPostingTimes } from "@/lib/optimal-times";
+import { refreshLearningContext } from "@/lib/copy-learner";
 
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
@@ -76,6 +77,13 @@ export async function GET(request: NextRequest) {
       });
     } catch (err) {
       console.error("Failed to refresh optimal times cache:", err);
+    }
+
+    // Refresh AI copy learning context (top-performing content examples)
+    try {
+      await refreshLearningContext();
+    } catch (err) {
+      console.error("Failed to refresh copy learning context:", err);
     }
 
     return {

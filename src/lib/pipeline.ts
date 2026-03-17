@@ -11,6 +11,7 @@ import { withQuota } from "./api-quota";
 import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
 import { getAppSetting } from "./settings";
 import { getNextOptimalSlot } from "./optimal-times";
+import { getLearningContext } from "./copy-learner";
 import type { Video, Platform } from "./types";
 
 const MAX_RETRIES = 3;
@@ -136,9 +137,12 @@ export async function processVideo(video: Video): Promise<void> {
     const autoScheduleEnabled = await getAppSetting<boolean>("auto_schedule_enabled");
     const defaultContentStatus = autoApprove === true ? "approved" : "review";
 
+    // Fetch learning context (top-performing content examples for Claude)
+    const learningContext = await getLearningContext().catch(() => "");
+
     if (recommendations.length === 0) {
       // If no clips recommended, create a single content item from the full video
-      await createFullVideoContent(video, videoBuffer, isSpanish, defaultContentStatus, visualContext);
+      await createFullVideoContent(video, videoBuffer, isSpanish, defaultContentStatus, visualContext, learningContext);
       await updateStatus(videoId, "clipped");
       return;
     }
@@ -157,6 +161,7 @@ export async function processVideo(video: Video): Promise<void> {
 
         // Determine if this is a YouTube full-length or short-form clip
         const clipDuration = rec.end_time - rec.start_time;
+        const isShort = clipDuration <= 60;
         const isYouTube = rec.platforms.includes("youtube") && clipDuration > 60;
 
         // Extract clip with FFmpeg
@@ -196,7 +201,9 @@ export async function processVideo(video: Video): Promise<void> {
           rec.suggested_title,
           rec.platforms,
           isSpanish,
-          visualContext
+          visualContext,
+          isShort,
+          learningContext
         ), { label: "Claude copy generation" });
 
         // Generate thumbnail for YouTube clips
@@ -309,7 +316,7 @@ export async function processVideo(video: Video): Promise<void> {
  * Used when Claude doesn't find specific clip-worthy moments,
  * or the video is short enough to post as-is.
  */
-async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review", visualContext = "") {
+async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review", visualContext = "", learningContext = "") {
   const transcript = video.transcript || "";
   const duration = video.duration_seconds || 0;
 
@@ -331,12 +338,15 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     : "Untitled Video";
 
   const platforms: Platform[] = ["youtube", "facebook", "instagram", "tiktok"];
+  const isShort = duration <= 60;
   const copy = await generatePlatformCopy(
     transcript.slice(0, 1000),
     titleHint,
     platforms,
     isSpanish,
-    visualContext
+    visualContext,
+    isShort,
+    learningContext
   );
 
   const title = copy.youtube_title || titleHint;

@@ -105,10 +105,26 @@ export async function publishContent(
             thumbnailBuffer = Buffer.from(await thumbRes.arrayBuffer());
           }
 
+          // Safety-net: ensure #Shorts tag for short clips (<= 60s)
+          let ytTags: string[] = content.youtube_tags || [];
+          if (content.clip_id) {
+            const { data: clip } = await supabase
+              .from("clips")
+              .select("duration_seconds")
+              .eq("id", content.clip_id)
+              .single();
+
+            if (clip?.duration_seconds && clip.duration_seconds <= 60) {
+              if (!ytTags.some((t: string) => t.toLowerCase() === "#shorts")) {
+                ytTags = ["#Shorts", ...ytTags];
+              }
+            }
+          }
+
           platformPostId = await uploadToYouTube({
             title: content.youtube_title || content.title,
             description: content.youtube_description || content.description || "",
-            tags: content.youtube_tags || [],
+            tags: ytTags,
             videoBuffer,
             thumbnailBuffer,
           });

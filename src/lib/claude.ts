@@ -250,7 +250,9 @@ export async function generatePlatformCopy(
   suggestedTitle: string,
   platforms: Platform[],
   isSpanish = false,
-  visualContext?: string
+  visualContext?: string,
+  isShort = false,
+  learningContext?: string
 ): Promise<PlatformCopy> {
   const client = getClient();
 
@@ -262,7 +264,15 @@ export async function generatePlatformCopy(
       {
         role: "user",
         content: `Generate social media copy for this video clip.
-
+${learningContext ? `\n${learningContext}\n` : ""}${isShort && platforms.includes("youtube") ? `
+YOUTUBE SHORTS OPTIMIZATION:
+- This is a YouTube Short (vertical video under 60 seconds)
+- YouTube title MUST be under 70 characters — shorter = better for Shorts
+- Include "#Shorts" as the FIRST tag in youtube_tags
+- Title should be punchy hooks: "Wait for it...", "This hit different", "When the music takes over 🔥"
+- DO NOT use long descriptive titles — Shorts need scroll-stopping hooks
+- youtube_description can be shorter (Shorts descriptions are less visible)
+` : ""}
 CLIP TRANSCRIPT:
 ${clipTranscript}
 
