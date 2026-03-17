@@ -298,6 +298,63 @@ export async function convertHeicToJpeg(
   }
 }
 
+/**
+ * Get audio duration in seconds using ffprobe.
+ */
+export async function getAudioDuration(
+  audioBuffer: Buffer
+): Promise<number> {
+  const tmpDir = await mkdtemp(join(tmpdir(), "tjs-adur-"));
+  const inputPath = join(tmpDir, "audio.mp3");
+
+  try {
+    await writeFile(inputPath, audioBuffer);
+
+    return new Promise<number>((resolve, reject) => {
+      ffmpeg.ffprobe(inputPath, (err, metadata) => {
+        if (err) return reject(err);
+        resolve(metadata.format.duration || 0);
+      });
+    });
+  } finally {
+    await unlink(inputPath).catch(() => {});
+  }
+}
+
+/**
+ * Extract a time-range chunk from an MP3 buffer.
+ */
+export async function extractAudioChunk(
+  audioBuffer: Buffer,
+  startTime: number,
+  endTime: number
+): Promise<Buffer> {
+  const tmpDir = await mkdtemp(join(tmpdir(), "tjs-achunk-"));
+  const inputPath = join(tmpDir, "audio.mp3");
+  const outputPath = join(tmpDir, "chunk.mp3");
+
+  try {
+    await writeFile(inputPath, audioBuffer);
+
+    await new Promise<void>((resolve, reject) => {
+      ffmpeg(inputPath)
+        .setStartTime(startTime)
+        .setDuration(endTime - startTime)
+        .audioCodec("libmp3lame")
+        .audioBitrate("64k")
+        .audioChannels(1)
+        .output(outputPath)
+        .on("end", () => resolve())
+        .on("error", (err) => reject(new Error(`FFmpeg chunk error: ${err.message}`)))
+        .run();
+    });
+
+    return await readFile(outputPath);
+  } finally {
+    await cleanup(inputPath, outputPath);
+  }
+}
+
 async function cleanup(...paths: (string | null)[]) {
   for (const p of paths) {
     if (p) await unlink(p).catch(() => {});

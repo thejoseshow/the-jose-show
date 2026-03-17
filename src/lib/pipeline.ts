@@ -4,7 +4,7 @@ import { transcribeVideo, generateSRT, getSegmentsInRange, getWordsInRange } fro
 import { extractClip, getVideoDuration, extractThumbnail, extractFrames, convertHeicToJpeg } from "./ffmpeg";
 import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt, analyzePhotoContent } from "./claude";
 import { generateThumbnail } from "./thumbnails";
-import { uploadClip, uploadThumbnail } from "./storage";
+import { uploadClip, uploadThumbnail, uploadRawVideo, downloadRawVideo } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
 import { withRetry } from "./retry";
 import { withQuota } from "./api-quota";
@@ -42,8 +42,13 @@ export async function processVideo(video: Video): Promise<void> {
       videoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive download" });
       storagePath = `raw/${videoId}/${video.filename}`;
 
-      // Skip raw upload to Supabase Storage (free tier has 50MB limit).
-      // The buffer stays in memory for processing; only processed clips get uploaded.
+      // Archive raw video to Supabase Storage (best-effort, non-blocking)
+      const rawPath = await uploadRawVideo(storagePath, videoBuffer, video.mime_type || "video/mp4");
+      if (rawPath) {
+        console.log(`Raw video archived: ${rawPath}`);
+      } else {
+        console.warn(`Raw video archive failed for ${videoId} (non-critical)`);
+      }
 
       // Get duration
       const duration = await getVideoDuration(videoBuffer, video.filename).catch(() => null);
@@ -61,8 +66,14 @@ export async function processVideo(video: Video): Promise<void> {
       // Update local object to match DB
       video = { ...video, storage_path: storagePath, duration_seconds: duration, status: "downloaded" };
     } else {
-      // Already downloaded in a previous run - re-download from Drive
-      videoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive re-download" });
+      // Already downloaded in a previous run — try Supabase Storage first, fall back to Drive
+      const supabaseBuf = video.storage_path ? await downloadRawVideo(video.storage_path) : null;
+      if (supabaseBuf) {
+        console.log(`Re-downloaded from Supabase Storage: ${video.storage_path}`);
+        videoBuffer = supabaseBuf;
+      } else {
+        videoBuffer = await withRetry(() => downloadFile(video.google_drive_file_id), { label: "Drive re-download" });
+      }
     }
 
     // ----- Stage 2: Transcribe (if not already transcribed) -----
@@ -125,11 +136,6 @@ export async function processVideo(video: Video): Promise<void> {
         visualContext
       ), { label: "Claude clip analysis" })
     );
-
-    // For short videos (<90s), limit to 1 clip to stay within Vercel timeout
-    if (duration < 90 && recommendations.length > 1) {
-      recommendations = [recommendations.sort((a, b) => b.score - a.score)[0]];
-    }
 
     // Check auto-approve settings
     const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
@@ -488,6 +494,74 @@ export async function processPhoto(video: Video): Promise<void> {
 
     throw err;
   }
+}
+
+/**
+ * Reprocess a video from Supabase Storage.
+ * Deletes existing clips + content, resets video status, and re-runs the full pipeline.
+ */
+export async function reprocessVideo(videoId: string): Promise<void> {
+  // Fetch video record
+  const { data: video, error } = await supabase
+    .from("videos")
+    .select("*")
+    .eq("id", videoId)
+    .single();
+
+  if (error || !video) {
+    throw new Error(`Video not found: ${videoId}`);
+  }
+
+  const v = video as Video;
+
+  if (!v.storage_path) {
+    throw new Error(`No storage_path for video ${videoId} — cannot reprocess without archived raw video`);
+  }
+
+  if (v.status === "downloading" || v.status === "transcribing" || v.status === "clipping") {
+    throw new Error(`Video ${videoId} is currently in-progress (status: ${v.status})`);
+  }
+
+  // Download raw video from Supabase Storage
+  const rawBuffer = await downloadRawVideo(v.storage_path);
+  if (!rawBuffer) {
+    throw new Error(`Failed to download raw video from Supabase Storage: ${v.storage_path}`);
+  }
+
+  // Delete existing clips and their content
+  const { data: existingClips } = await supabase
+    .from("clips")
+    .select("id")
+    .eq("video_id", videoId);
+
+  if (existingClips && existingClips.length > 0) {
+    const clipIds = existingClips.map((c) => c.id);
+    await supabase.from("content").delete().in("clip_id", clipIds);
+    await supabase.from("clips").delete().eq("video_id", videoId);
+  }
+
+  // Also delete any content directly tied to the video (full-video content with no clip)
+  await supabase.from("content").delete().is("clip_id", null).eq("type", "video_clip");
+
+  // Reset video status to "downloaded" so pipeline picks up from transcription
+  await supabase
+    .from("videos")
+    .update({
+      status: "downloaded",
+      transcript: null,
+      transcript_segments: null,
+      word_timestamps: null,
+      error_message: null,
+      retry_count: 0,
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", videoId);
+
+  // Re-run the full pipeline with the raw buffer in memory
+  const refreshed = { ...v, status: "downloaded" as const, transcript: null, transcript_segments: null, word_timestamps: null };
+  // Temporarily override downloadFile by setting status to "downloaded" — processVideo will re-download
+  // But we already have the buffer, so we call processVideo which will try Supabase Storage first
+  await processVideo(refreshed);
 }
 
 async function updateStatus(videoId: string, status: Video["status"]) {

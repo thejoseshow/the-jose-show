@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
         .select("*")
         .in("status", ["new", "downloaded", "transcribed"])
         .order("created_at", { ascending: true })
-        .limit(1);
+        .limit(3);
 
       let processed = 0;
       const errors: string[] = [];

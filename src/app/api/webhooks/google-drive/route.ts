@@ -31,7 +31,7 @@ export async function POST(request: NextRequest) {
   try {
     const newFiles = await listNewFiles();
     let created = 0;
-    let firstNewVideoId: string | null = null;
+    const newVideoIds: string[] = [];
 
     for (const file of newFiles) {
       const fileSize = parseInt(file.size, 10);
@@ -53,18 +53,18 @@ export async function POST(request: NextRequest) {
 
       if (!error && data) {
         created++;
-        if (!firstNewVideoId) firstNewVideoId = data.id;
+        newVideoIds.push(data.id);
       }
     }
 
-    // Auto-process the first new video immediately (keep to 1 to stay within Vercel timeout)
-    let processed = false;
-    if (firstNewVideoId) {
+    // Auto-process up to 3 new videos immediately (Pro tier: 15-min timeout)
+    let processed = 0;
+    for (const videoId of newVideoIds.slice(0, 3)) {
       try {
         const { data: videoRow } = await supabase
           .from("videos")
           .select("*")
-          .eq("id", firstNewVideoId)
+          .eq("id", videoId)
           .single();
 
         if (videoRow) {
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
           } else {
             await processVideo(v);
           }
-          processed = true;
+          processed++;
         }
       } catch (processErr) {
         console.error("Drive webhook auto-process error:", processErr);

@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { extractAudio } from "./ffmpeg";
+import { extractAudio, getAudioDuration, extractAudioChunk } from "./ffmpeg";
 import type { TranscriptSegment, WordTimestamp } from "./types";
 
 const WHISPER_MAX_BYTES = 25 * 1024 * 1024; // 25MB
@@ -39,6 +39,12 @@ export async function transcribeVideo(
     uploadBuffer = await extractAudio(fileBuffer, filename);
     uploadFilename = "audio.mp3";
     console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+  }
+
+  // If extracted audio still exceeds 25MB, use chunked transcription
+  if (uploadBuffer.length > WHISPER_MAX_BYTES) {
+    console.log(`Audio ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB exceeds 25MB — using chunked transcription`);
+    return transcribeChunked(uploadBuffer);
   }
 
   // Whisper API accepts file uploads - create a File-like object
@@ -84,6 +90,94 @@ export async function transcribeVideo(
     duration:
       (response as unknown as { duration?: number }).duration ||
       (segments.length > 0 ? segments[segments.length - 1].end : 0),
+    isSpanish: detectedLang === "es" || detectedLang === "spanish",
+  };
+}
+
+const CHUNK_DURATION = 600; // 10 minutes per chunk
+const CHUNK_OVERLAP = 30;   // 30s overlap for dedup
+
+/**
+ * Chunked transcription for audio files > 25MB.
+ * Splits into 10-min chunks with 30s overlap, transcribes each, merges results.
+ */
+async function transcribeChunked(
+  audioBuffer: Buffer
+): Promise<TranscriptionResult> {
+  const openai = getOpenAI();
+  const totalDuration = await getAudioDuration(audioBuffer);
+  const allSegments: TranscriptSegment[] = [];
+  const allWords: WordTimestamp[] = [];
+  const textParts: string[] = [];
+  let detectedLang = "en";
+
+  let chunkStart = 0;
+  let chunkIndex = 0;
+
+  while (chunkStart < totalDuration) {
+    const chunkEnd = Math.min(chunkStart + CHUNK_DURATION, totalDuration);
+    console.log(`Transcribing chunk ${chunkIndex + 1}: ${chunkStart.toFixed(0)}s–${chunkEnd.toFixed(0)}s`);
+
+    const chunkBuffer = await extractAudioChunk(audioBuffer, chunkStart, chunkEnd);
+
+    const file = new File([new Uint8Array(chunkBuffer)], "chunk.mp3", {
+      type: "audio/mpeg",
+    });
+
+    const response = await openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file,
+      response_format: "verbose_json",
+      timestamp_granularities: ["word", "segment"],
+    });
+
+    // Extract segments and offset timestamps
+    const chunkSegments: TranscriptSegment[] = (
+      (response as unknown as { segments?: Array<{ start: number; end: number; text: string }> })
+        .segments || []
+    ).map((seg) => ({
+      start: seg.start + chunkStart,
+      end: seg.end + chunkStart,
+      text: seg.text.trim(),
+    }));
+
+    const chunkWords: WordTimestamp[] = (
+      (response as unknown as { words?: Array<{ word: string; start: number; end: number }> })
+        .words || []
+    ).map((w) => ({
+      word: w.word.trim(),
+      start: w.start + chunkStart,
+      end: w.end + chunkStart,
+    }));
+
+    // Dedup overlap: skip segments/words that fall within the overlap zone of a previous chunk
+    if (chunkIndex > 0) {
+      const overlapBoundary = chunkStart + CHUNK_OVERLAP;
+      const dedupedSegments = chunkSegments.filter((s) => s.start >= overlapBoundary);
+      const dedupedWords = chunkWords.filter((w) => w.start >= overlapBoundary);
+      allSegments.push(...dedupedSegments);
+      allWords.push(...dedupedWords);
+      textParts.push(dedupedSegments.map((s) => s.text).join(" "));
+    } else {
+      allSegments.push(...chunkSegments);
+      allWords.push(...chunkWords);
+      textParts.push(response.text);
+    }
+
+    if (chunkIndex === 0) {
+      detectedLang = (response as unknown as { language?: string }).language || "en";
+    }
+
+    chunkStart += CHUNK_DURATION - CHUNK_OVERLAP;
+    chunkIndex++;
+  }
+
+  return {
+    text: textParts.join(" "),
+    segments: allSegments,
+    words: allWords,
+    language: detectedLang,
+    duration: totalDuration,
     isSpanish: detectedLang === "es" || detectedLang === "spanish",
   };
 }
