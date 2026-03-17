@@ -59,7 +59,21 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      return { new_files_detected: newRecords, processed, errors: errors.length > 0 ? errors : undefined };
+      // Auto-archive failed videos older than 24 hours
+      const archiveCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+      const { data: archived } = await supabase
+        .from("videos")
+        .update({ status: "archived", updated_at: new Date().toISOString() })
+        .eq("status", "failed")
+        .lt("updated_at", archiveCutoff)
+        .select("id");
+
+      return {
+        new_files_detected: newRecords,
+        processed,
+        archived: archived?.length || 0,
+        errors: errors.length > 0 ? errors : undefined,
+      };
     });
 
     return NextResponse.json({ success: true, ...result });

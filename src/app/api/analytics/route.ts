@@ -4,9 +4,14 @@ import { getVideoAnalytics } from "@/lib/youtube";
 import { getFacebookVideoInsights, getInstagramMediaInsights } from "@/lib/meta";
 import type { Platform } from "@/lib/types";
 
-// GET /api/analytics - Get analytics overview, per-content stats, or platform health
+// GET /api/analytics - Get analytics overview, per-content stats, platform health, or timeseries
 export async function GET(request: NextRequest) {
   const health = request.nextUrl.searchParams.get("health");
+  const timeseries = request.nextUrl.searchParams.get("timeseries");
+
+  if (timeseries === "true") {
+    return handleTimeseries(request);
+  }
 
   if (health === "true") {
     const platforms = ["google", "facebook", "tiktok"] as const;
@@ -124,12 +129,14 @@ export async function GET(request: NextRequest) {
     }
     const latest = Array.from(latestByPlatform.values());
 
-    const totals = { views: 0, likes: 0, comments: 0, shares: 0 };
+    const totals = { views: 0, likes: 0, comments: 0, shares: 0, reach: 0, watch_time_seconds: 0 };
     for (const snap of latest) {
       totals.views += snap.views;
       totals.likes += snap.likes;
       totals.comments += snap.comments;
       totals.shares += snap.shares;
+      totals.reach += snap.reach ?? 0;
+      totals.watch_time_seconds += snap.watch_time_seconds ?? 0;
     }
 
     analytics.push({
@@ -149,9 +156,11 @@ export async function GET(request: NextRequest) {
       total_likes: acc.total_likes + item.likes,
       total_comments: acc.total_comments + item.comments,
       total_shares: acc.total_shares + item.shares,
+      total_reach: acc.total_reach + item.reach,
+      total_watch_time: acc.total_watch_time + item.watch_time_seconds,
       total_published: acc.total_published + 1,
     }),
-    { total_views: 0, total_likes: 0, total_comments: 0, total_shares: 0, total_published: 0 }
+    { total_views: 0, total_likes: 0, total_comments: 0, total_shares: 0, total_reach: 0, total_watch_time: 0, total_published: 0 }
   );
 
   // Calculate trends by comparing with previous period
@@ -199,5 +208,96 @@ export async function GET(request: NextRequest) {
   return NextResponse.json({
     success: true,
     data: { summary, content: analytics, trends },
+  });
+}
+
+async function handleTimeseries(request: NextRequest) {
+  const range = request.nextUrl.searchParams.get("range") || "30d";
+
+  const now = new Date();
+  let rangeStart: string;
+
+  if (range === "7d") {
+    rangeStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  } else if (range === "30d") {
+    rangeStart = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  } else {
+    // "all" — go back 90 days max for charting
+    rangeStart = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+  }
+
+  // Get all snapshots in the date range
+  const { data: snapshots } = await supabase
+    .from("analytics_snapshots")
+    .select("content_id, platform, views, likes, comments, shares, snapshot_date")
+    .gte("snapshot_date", rangeStart)
+    .order("snapshot_date", { ascending: true });
+
+  if (!snapshots || snapshots.length === 0) {
+    return NextResponse.json({ success: true, data: { timeseries: [], content_timeseries: {} } });
+  }
+
+  // Aggregate by date + platform for the main chart
+  const dateMap = new Map<string, Record<string, number>>();
+
+  for (const snap of snapshots) {
+    const date = snap.snapshot_date;
+    if (!dateMap.has(date)) {
+      dateMap.set(date, { youtube: 0, facebook: 0, instagram: 0, tiktok: 0, total: 0 });
+    }
+    const entry = dateMap.get(date)!;
+    const platform = snap.platform as string;
+    entry[platform] = (entry[platform] || 0) + snap.views;
+    entry.total += snap.views;
+  }
+
+  const timeseries = Array.from(dateMap.entries()).map(([date, values]) => ({
+    date,
+    ...values,
+  }));
+
+  // Aggregate by date + platform for engagement line chart
+  const engMap = new Map<string, { likes: number; comments: number; views: number }>();
+  for (const snap of snapshots) {
+    const date = snap.snapshot_date;
+    if (!engMap.has(date)) {
+      engMap.set(date, { likes: 0, comments: 0, views: 0 });
+    }
+    const entry = engMap.get(date)!;
+    entry.likes += snap.likes;
+    entry.comments += snap.comments;
+    entry.views += snap.views;
+  }
+
+  const engagement = Array.from(engMap.entries()).map(([date, vals]) => ({
+    date,
+    rate: vals.views > 0 ? Math.round(((vals.likes + vals.comments) / vals.views) * 1000) / 10 : 0,
+  }));
+
+  // Per-content daily data for sparklines
+  const contentMap = new Map<string, Array<{ date: string; views: number; likes: number }>>();
+  for (const snap of snapshots) {
+    if (!contentMap.has(snap.content_id)) {
+      contentMap.set(snap.content_id, []);
+    }
+    // Aggregate across platforms for same content+date
+    const arr = contentMap.get(snap.content_id)!;
+    const existing = arr.find((e) => e.date === snap.snapshot_date);
+    if (existing) {
+      existing.views += snap.views;
+      existing.likes += snap.likes;
+    } else {
+      arr.push({ date: snap.snapshot_date, views: snap.views, likes: snap.likes });
+    }
+  }
+
+  const content_timeseries: Record<string, Array<{ date: string; views: number; likes: number }>> = {};
+  for (const [contentId, data] of contentMap.entries()) {
+    content_timeseries[contentId] = data.sort((a, b) => a.date.localeCompare(b.date));
+  }
+
+  return NextResponse.json({
+    success: true,
+    data: { timeseries, engagement, content_timeseries },
   });
 }

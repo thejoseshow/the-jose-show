@@ -38,6 +38,9 @@ export async function GET(request: NextRequest) {
               likes: stats.likes,
               comments: stats.comments,
               shares: stats.shares,
+              watch_time_seconds: stats.durationSeconds ? stats.views * stats.durationSeconds : null,
+              reach: 0,
+              impressions: 0,
               snapshot_date: today,
             },
             { onConflict: "content_id,platform,snapshot_date" }
@@ -61,6 +64,8 @@ export async function GET(request: NextRequest) {
             likes: stats.likes,
             comments: stats.comments,
             shares: stats.shares,
+            reach: stats.reach,
+            impressions: stats.impressions,
             snapshot_date: today,
           },
           { onConflict: "content_id,platform,snapshot_date" }
@@ -83,6 +88,8 @@ export async function GET(request: NextRequest) {
             likes: stats.likes,
             comments: stats.comments,
             shares: stats.shares,
+            reach: stats.reach,
+            impressions: stats.impressions,
             snapshot_date: today,
           },
           { onConflict: "content_id,platform,snapshot_date" }
@@ -106,6 +113,8 @@ export async function GET(request: NextRequest) {
               likes: stats.likes,
               comments: stats.comments,
               shares: stats.shares,
+              reach: 0,
+              impressions: 0,
               snapshot_date: today,
             },
             { onConflict: "content_id,platform,snapshot_date" }

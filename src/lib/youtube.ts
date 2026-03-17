@@ -70,17 +70,33 @@ export async function uploadToYouTube(params: YouTubeUploadParams): Promise<stri
   return videoId;
 }
 
+/**
+ * Parse ISO 8601 duration (e.g. "PT1M30S") to seconds.
+ */
+function parseISO8601Duration(duration: string): number {
+  const match = duration.match(/PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/);
+  if (!match) return 0;
+  const hours = parseInt(match[1] || "0", 10);
+  const minutes = parseInt(match[2] || "0", 10);
+  const seconds = parseInt(match[3] || "0", 10);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
 export async function getVideoAnalytics(videoId: string) {
   const auth = await getAuthenticatedClient();
   const youtube = google.youtube({ version: "v3", auth });
 
   const response = await youtube.videos.list({
-    part: ["statistics", "snippet"],
+    part: ["statistics", "snippet", "contentDetails"],
     id: [videoId],
   });
 
   const video = response.data.items?.[0];
   if (!video) return null;
+
+  const durationSeconds = video.contentDetails?.duration
+    ? parseISO8601Duration(video.contentDetails.duration)
+    : 0;
 
   return {
     views: parseInt(video.statistics?.viewCount || "0", 10),
@@ -89,6 +105,7 @@ export async function getVideoAnalytics(videoId: string) {
     // YouTube Data API v3 (videos.list) doesn't expose share counts.
     // Would require YouTube Analytics API with yt-analytics.readonly scope.
     shares: 0,
+    durationSeconds,
   };
 }
 

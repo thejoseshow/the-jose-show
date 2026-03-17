@@ -383,7 +383,30 @@ export async function getFacebookVideoInsights(videoId: string) {
 
   if (data.error) {
     console.error(`FB insights error for ${videoId}:`, data.error.message);
-    return { views: 0, likes: 0, comments: 0, shares: 0 };
+    return { views: 0, likes: 0, comments: 0, shares: 0, reach: 0, impressions: 0 };
+  }
+
+  // Fetch video_insights for reach/impressions (some content types don't support this)
+  let reach = 0;
+  let impressions = 0;
+  try {
+    const insightsRes = await fetch(
+      `${GRAPH_API}/${videoId}/video_insights?metric=total_video_impressions,total_video_impressions_unique&access_token=${token}`
+    );
+    const insightsData = await insightsRes.json();
+    if (!insightsData.error) {
+      for (const item of insightsData.data || []) {
+        const val = item.values?.[0]?.value;
+        if (item.name === "total_video_impressions" && typeof val === "number") {
+          impressions = val;
+        }
+        if (item.name === "total_video_impressions_unique" && typeof val === "number") {
+          reach = val;
+        }
+      }
+    }
+  } catch {
+    // Fallback: some content types don't support video_insights
   }
 
   return {
@@ -391,19 +414,21 @@ export async function getFacebookVideoInsights(videoId: string) {
     likes: typeof data.likes?.summary?.total_count === "number" ? data.likes.summary.total_count : 0,
     comments: typeof data.comments?.summary?.total_count === "number" ? data.comments.summary.total_count : 0,
     shares: typeof data.shares?.count === "number" ? data.shares.count : 0,
+    reach,
+    impressions,
   };
 }
 
 export async function getInstagramMediaInsights(mediaId: string) {
   const token = await getMetaToken();
   const res = await fetch(
-    `${GRAPH_API}/${mediaId}/insights?metric=plays,likes,comments,shares&access_token=${token}`
+    `${GRAPH_API}/${mediaId}/insights?metric=plays,likes,comments,shares,reach,impressions&access_token=${token}`
   );
   const data = await res.json();
 
   if (data.error) {
     console.error(`IG insights error for ${mediaId}:`, data.error.message);
-    return { views: 0, likes: 0, comments: 0, shares: 0 };
+    return { views: 0, likes: 0, comments: 0, shares: 0, reach: 0, impressions: 0 };
   }
 
   const metrics: Record<string, number> = {};
@@ -419,5 +444,7 @@ export async function getInstagramMediaInsights(mediaId: string) {
     likes: metrics.likes || 0,
     comments: metrics.comments || 0,
     shares: metrics.shares || 0,
+    reach: metrics.reach || 0,
+    impressions: metrics.impressions || 0,
   };
 }

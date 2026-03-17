@@ -7,6 +7,7 @@ import { generateThumbnail } from "./thumbnails";
 import { uploadClip, uploadThumbnail } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
 import { withRetry } from "./retry";
+import { withQuota } from "./api-quota";
 import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
 import { getAppSetting } from "./settings";
 import { getNextOptimalSlot } from "./optimal-times";
@@ -67,7 +68,9 @@ export async function processVideo(video: Video): Promise<void> {
     if (!video.transcript) {
       await updateStatus(videoId, "transcribing");
 
-      const transcription = await withRetry(() => transcribeVideo(videoBuffer, video.filename), { label: "Whisper transcription" });
+      const transcription = await withQuota("whisper", () =>
+        withRetry(() => transcribeVideo(videoBuffer, video.filename), { label: "Whisper transcription" })
+      );
 
       await supabase
         .from("videos")
@@ -113,12 +116,14 @@ export async function processVideo(video: Video): Promise<void> {
     }
 
     // Ask Claude to recommend clips (now with visual context)
-    let recommendations = await withRetry(() => analyzeTranscriptForClips(
-      video.transcript || "",
-      segments,
-      duration,
-      visualContext
-    ), { label: "Claude clip analysis" });
+    let recommendations = await withQuota("claude", () =>
+      withRetry(() => analyzeTranscriptForClips(
+        video.transcript || "",
+        segments,
+        duration,
+        visualContext
+      ), { label: "Claude clip analysis" })
+    );
 
     // For short videos (<90s), limit to 1 clip to stay within Vercel timeout
     if (duration < 90 && recommendations.length > 1) {

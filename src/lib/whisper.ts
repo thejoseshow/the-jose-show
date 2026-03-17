@@ -29,11 +29,13 @@ export async function transcribeVideo(
 ): Promise<TranscriptionResult> {
   const openai = getOpenAI();
 
-  // If file exceeds Whisper's 25MB limit, extract compressed audio first
+  // Extract audio for files that exceed 25MB OR have problematic codecs (.mov from CapCut, etc.)
   let uploadBuffer = fileBuffer;
   let uploadFilename = filename;
-  if (fileBuffer.length > WHISPER_MAX_BYTES) {
-    console.log(`File ${filename} is ${(fileBuffer.length / 1024 / 1024).toFixed(1)}MB, extracting audio...`);
+  const ext = filename.split(".").pop()?.toLowerCase();
+  const needsAudioExtract = fileBuffer.length > WHISPER_MAX_BYTES || ext === "mov" || ext === "avi" || ext === "mkv";
+  if (needsAudioExtract) {
+    console.log(`File ${filename} (${ext}, ${(fileBuffer.length / 1024 / 1024).toFixed(1)}MB) — extracting audio for Whisper compatibility...`);
     uploadBuffer = await extractAudio(fileBuffer, filename);
     uploadFilename = "audio.mp3";
     console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);

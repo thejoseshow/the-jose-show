@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Plus, Pencil, Trash2 } from "lucide-react";
-import { RECURRENCE_PRESETS, buildMonthlyByDay } from "@/lib/recurrence";
+import { RECURRENCE_PRESETS, buildMonthlyByDay, buildMonthlyLastWeekday } from "@/lib/recurrence";
 import type { Event, EventType } from "@/lib/types";
 
 const EVENT_TYPE_LABELS: Record<EventType, string> = {
@@ -335,6 +335,8 @@ function EventForm({
             onValueChange={(v) => {
               if (v === "__MONTHLY_BY_DAY__" && startDate) {
                 setRecurrenceRule(buildMonthlyByDay(new Date(startDate)));
+              } else if (v === "__MONTHLY_LAST_WEEKDAY__" && startDate) {
+                setRecurrenceRule(buildMonthlyLastWeekday(new Date(startDate)));
               } else {
                 setRecurrenceRule(v);
               }

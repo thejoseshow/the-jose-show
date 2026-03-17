@@ -12,7 +12,8 @@ export type VideoStatus =
   | "transcribed"
   | "clipping"
   | "clipped"
-  | "failed";
+  | "failed"
+  | "archived";
 
 export type ContentStatus =
   | "draft"

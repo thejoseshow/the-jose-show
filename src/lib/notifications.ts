@@ -102,6 +102,71 @@ export async function notifyWeeklyDigest(insights: {
   });
 }
 
+export async function notifyErrorDigest(errors: {
+  failedVideos: Array<{ filename: string; error_message: string | null; retry_count: number }>;
+  failedPublishes: Array<{ platform: string; error_message: string | null; content_id: string }>;
+  failedCrons: Array<{ job_name: string; error: string | null }>;
+}) {
+  const to = process.env.NOTIFICATION_EMAIL;
+  if (!to) return;
+
+  const total = errors.failedVideos.length + errors.failedPublishes.length + errors.failedCrons.length;
+
+  const sections: string[] = [];
+  if (errors.failedVideos.length > 0) {
+    const items = errors.failedVideos
+      .map((v) => `<li><strong>${v.filename}</strong> (${v.retry_count} retries): ${v.error_message || "Unknown"}</li>`)
+      .join("");
+    sections.push(`<h3>Pipeline Failures (${errors.failedVideos.length})</h3><ul>${items}</ul>`);
+  }
+  if (errors.failedPublishes.length > 0) {
+    const items = errors.failedPublishes
+      .map((p) => `<li><strong>${p.platform}</strong>: ${p.error_message || "Unknown"}</li>`)
+      .join("");
+    sections.push(`<h3>Publish Failures (${errors.failedPublishes.length})</h3><ul>${items}</ul>`);
+  }
+  if (errors.failedCrons.length > 0) {
+    const items = errors.failedCrons
+      .map((c) => `<li><strong>${c.job_name}</strong>: ${c.error || "Unknown"}</li>`)
+      .join("");
+    sections.push(`<h3>Cron Failures (${errors.failedCrons.length})</h3><ul>${items}</ul>`);
+  }
+
+  await getResend().emails.send({
+    from: process.env.RESEND_FROM_EMAIL || "noreply@thejoseshow.com",
+    to,
+    subject: `Error digest: ${total} issue${total > 1 ? "s" : ""} in last 24h`,
+    html: `
+      <h2>Daily Error Report</h2>
+      <p>${total} error${total > 1 ? "s" : ""} detected in the last 24 hours.</p>
+      ${sections.join("")}
+      <p style="margin-top:20px;"><a href="${process.env.NEXT_PUBLIC_SITE_URL}/dashboard" style="background:#e11d48;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;display:inline-block;">Go to Dashboard</a></p>
+    `,
+  });
+}
+
+export async function notifyContentGap(queuedCount: number, pendingCount: number) {
+  const to = process.env.NOTIFICATION_EMAIL;
+  if (!to) return;
+
+  const suggestions: string[] = [];
+  if (queuedCount > 0) suggestions.push(`${queuedCount} content item${queuedCount > 1 ? "s" : ""} in review/approved — approve and publish them!`);
+  if (pendingCount > 0) suggestions.push(`${pendingCount} video${pendingCount > 1 ? "s" : ""} still processing in the pipeline.`);
+  if (queuedCount === 0 && pendingCount === 0) suggestions.push("Drop some new videos into your Google Drive folder to get the pipeline rolling.");
+
+  await getResend().emails.send({
+    from: process.env.RESEND_FROM_EMAIL || "noreply@thejoseshow.com",
+    to,
+    subject: "Content gap: No posts in 3+ days",
+    html: `
+      <h2>Content Gap Detected</h2>
+      <p>No content has been published in the last 3 days.</p>
+      <ul>${suggestions.map((s) => `<li>${s}</li>`).join("")}</ul>
+      <p><a href="${process.env.NEXT_PUBLIC_SITE_URL}/dashboard" style="background:#e11d48;color:white;padding:12px 24px;text-decoration:none;border-radius:8px;display:inline-block;">Go to Dashboard</a></p>
+    `,
+  });
+}
+
 export async function notifyPublishSuccess(
   title: string,
   platforms: string[]

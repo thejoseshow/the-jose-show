@@ -7,8 +7,7 @@ import {
   isEqual,
   getDay,
   getDate,
-  setDate,
-  format,
+  lastDayOfMonth,
 } from "date-fns";
 import type { Event } from "./types";
 
@@ -25,6 +24,7 @@ export const RECURRENCE_PRESETS: RecurrencePreset[] = [
   { label: "Every 2 weeks", value: "FREQ=WEEKLY;INTERVAL=2" },
   { label: "Monthly (same date)", value: "FREQ=MONTHLY;INTERVAL=1" },
   { label: "Monthly (same weekday)", value: "__MONTHLY_BY_DAY__" },
+  { label: "Monthly (last weekday of month)", value: "__MONTHLY_LAST_WEEKDAY__" },
 ];
 
 /**
@@ -38,10 +38,19 @@ export function buildMonthlyByDay(date: Date): string {
   return `FREQ=MONTHLY;BYDAY=${weekNum}${DAY_ABBR[dayOfWeek]}`;
 }
 
+/**
+ * Compute iCalendar BYDAY rule for the last occurrence of a weekday in the month.
+ * e.g., last Sunday → "FREQ=MONTHLY;BYDAY=-1SU"
+ */
+export function buildMonthlyLastWeekday(date: Date): string {
+  const dayOfWeek = getDay(date); // 0=Sun .. 6=Sat
+  return `FREQ=MONTHLY;BYDAY=-1${DAY_ABBR[dayOfWeek]}`;
+}
+
 interface ParsedRule {
   freq: "WEEKLY" | "MONTHLY";
   interval: number;
-  byday?: string; // e.g. "2SA"
+  byday?: string; // e.g. "2SA" or "-1SU"
 }
 
 function parseRule(rule: string): ParsedRule | null {
@@ -75,6 +84,17 @@ function findNthWeekdayInMonth(year: number, month: number, weekday: number, nth
 }
 
 /**
+ * For MONTHLY;BYDAY=-1SU style rules: find the last occurrence of a weekday in a given month.
+ */
+function findLastWeekdayInMonth(year: number, month: number, weekday: number): Date {
+  const last = lastDayOfMonth(new Date(year, month, 1));
+  const lastWeekday = getDay(last);
+  let dayOffset = lastWeekday - weekday;
+  if (dayOffset < 0) dayOffset += 7;
+  return new Date(year, month, last.getDate() - dayOffset);
+}
+
+/**
  * Expand a recurring event into individual instance dates within [rangeStart, rangeEnd].
  * Capped at 100 iterations to avoid runaway loops.
  */
@@ -101,8 +121,8 @@ export function expandRecurringEvent(event: Event, rangeStart: Date, rangeEnd: D
     }
   } else if (rule.freq === "MONTHLY") {
     if (rule.byday) {
-      // BYDAY=2SA → nth=2, weekday=6 (Saturday)
-      const match = rule.byday.match(/^(\d)(\w{2})$/);
+      // BYDAY=2SA → nth=2, weekday=6 (Saturday); BYDAY=-1SU → nth=-1, weekday=0 (Sunday)
+      const match = rule.byday.match(/^(-?\d+)(\w{2})$/);
       if (!match) return [];
       const nth = parseInt(match[1], 10);
       const weekday = DAY_ABBR.indexOf(match[2] as (typeof DAY_ABBR)[number]);
@@ -113,7 +133,9 @@ export function expandRecurringEvent(event: Event, rangeStart: Date, rangeEnd: D
       let month = eventStart.getMonth();
 
       while (iterations < 100) {
-        const candidate = findNthWeekdayInMonth(year, month, weekday, nth);
+        const candidate = nth < 0
+          ? findLastWeekdayInMonth(year, month, weekday)
+          : findNthWeekdayInMonth(year, month, weekday, nth);
         const candidateDay = startOfDay(candidate);
 
         if (isAfter(candidateDay, rangeEndDay)) break;

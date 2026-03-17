@@ -4,6 +4,7 @@ import { withCronLog } from "@/lib/cron-logger";
 import { supabase } from "@/lib/supabase";
 import { generateWeeklyInsights } from "@/lib/claude";
 import { notifyWeeklyDigest } from "@/lib/notifications";
+import { getOptimalPostingTimes } from "@/lib/optimal-times";
 
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
@@ -64,6 +65,18 @@ export async function GET(request: NextRequest) {
 
     // Send email digest
     await notifyWeeklyDigest(insights).catch(console.error);
+
+    // Refresh optimal posting times cache (continuous timing model)
+    try {
+      const optimalTimes = await getOptimalPostingTimes();
+      await supabase.from("app_settings").upsert({
+        key: "computed_optimal_times",
+        value: JSON.stringify(optimalTimes),
+        updated_at: new Date().toISOString(),
+      });
+    } catch (err) {
+      console.error("Failed to refresh optimal times cache:", err);
+    }
 
     return {
       week_start: weekStartStr,

@@ -27,6 +27,22 @@
     {
       "path": "/api/cron/weekly-digest",
       "schedule": "0 12 * * 1"
+    },
+    {
+      "path": "/api/cron/publish-retry",
+      "schedule": "30 */4 * * *"
+    },
+    {
+      "path": "/api/cron/cross-post",
+      "schedule": "0 15 * * *"
+    },
+    {
+      "path": "/api/cron/content-gap",
+      "schedule": "0 17 * * *"
+    },
+    {
+      "path": "/api/cron/error-digest",
+      "schedule": "0 7 * * *"
     }
   ]
 }
