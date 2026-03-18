@@ -74,8 +74,8 @@ export default function UploadsPage() {
         setProcessResult(data.error || "Processing failed");
       }
       await loadVideos();
-    } catch {
-      setProcessResult("Failed to trigger processing");
+    } catch (err) {
+      setProcessResult(`Failed to trigger processing: ${err instanceof Error ? err.message : "Network error"}`);
     }
     setProcessing(false);
   }

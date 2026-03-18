@@ -98,12 +98,15 @@ export async function listNewFiles(): Promise<DriveFile[]> {
 
   if (!folderId) throw new Error("Missing GOOGLE_DRIVE_FOLDER_ID");
 
-  // Get files already tracked
+  // Get files already tracked (by Drive ID and filename to prevent duplicates)
   const { data: existingVideos } = await supabase
     .from("videos")
-    .select("google_drive_file_id");
+    .select("google_drive_file_id, filename");
   const existingIds = new Set(
     (existingVideos || []).map((v) => v.google_drive_file_id)
+  );
+  const existingFilenames = new Set(
+    (existingVideos || []).map((v) => v.filename)
   );
 
   const response = await drive.files.list({
@@ -117,7 +120,7 @@ export async function listNewFiles(): Promise<DriveFile[]> {
 
   const rawFiles = (response.data.files || []) as Omit<DriveFile, "isPhoto">[];
   return rawFiles
-    .filter((f) => !existingIds.has(f.id))
+    .filter((f) => !existingIds.has(f.id) && !existingFilenames.has(f.name))
     .map((f) => ({ ...f, isPhoto: f.mimeType.startsWith("image/") }));
 }
 
