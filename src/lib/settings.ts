@@ -8,7 +8,11 @@ export async function getAppSetting<T = unknown>(key: string): Promise<T | null>
     .single();
 
   if (error || !data) return null;
-  return data.value as T;
+  try {
+    return JSON.parse(data.value) as T;
+  } catch {
+    return data.value as T;
+  }
 }
 
 export async function setAppSetting(key: string, value: unknown): Promise<void> {

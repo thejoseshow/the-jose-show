@@ -17,10 +17,14 @@ export async function GET() {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  // Convert rows to a key-value object
+  // Convert rows to a key-value object, parsing JSON-stringified values
   const settings: Record<string, unknown> = {};
   for (const row of data || []) {
-    settings[row.key] = row.value;
+    try {
+      settings[row.key] = JSON.parse(row.value);
+    } catch {
+      settings[row.key] = row.value;
+    }
   }
 
   return NextResponse.json({ success: true, data: settings });
