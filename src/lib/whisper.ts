@@ -37,21 +37,42 @@ export async function transcribeVideo(
   const needsAudioExtract = fileBuffer.length > WHISPER_MAX_BYTES || !whisperNativeFormats.has(ext || "");
   if (needsAudioExtract) {
     console.log(`File ${filename} (${ext}, ${(fileBuffer.length / 1024 / 1024).toFixed(1)}MB) — extracting audio for Whisper compatibility...`);
+    let extracted = false;
+
+    // Try extraction with original filename
     try {
       uploadBuffer = await extractAudio(fileBuffer, filename);
-      uploadFilename = "audio.mp3";
-      console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
-    } catch (audioErr) {
-      console.error(`Audio extraction failed for ${filename}, retrying with raw copy:`, audioErr);
-      // Fallback: try extracting with -c copy to m4a (avoids re-encoding)
-      try {
-        uploadBuffer = await extractAudio(fileBuffer, filename.replace(/\.\w+$/, ".mp4"));
+      if (uploadBuffer.length > 1000) {
         uploadFilename = "audio.mp3";
-        console.log(`Fallback audio extraction: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+        extracted = true;
+        console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+      } else {
+        console.warn(`Audio extraction produced empty/tiny output (${uploadBuffer.length} bytes) for ${filename}`);
+      }
+    } catch (audioErr) {
+      console.error(`Audio extraction failed for ${filename}:`, audioErr);
+    }
+
+    // Fallback: rename to .mp4 and retry (helps FFmpeg detect container)
+    if (!extracted) {
+      try {
+        const mp4Name = filename.replace(/\.\w+$/, ".mp4");
+        console.log(`Retrying audio extraction as ${mp4Name}...`);
+        uploadBuffer = await extractAudio(fileBuffer, mp4Name);
+        if (uploadBuffer.length > 1000) {
+          uploadFilename = "audio.mp3";
+          extracted = true;
+          console.log(`Fallback audio extraction: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+        }
       } catch (fallbackErr) {
         console.error(`Fallback audio extraction also failed:`, fallbackErr);
-        throw new Error(`Cannot extract audio from ${filename}: ${audioErr instanceof Error ? audioErr.message : "unknown"}`);
       }
+    }
+
+    // Last resort: wrap raw buffer as .mp4 (Whisper accepts mp4 container)
+    if (!extracted) {
+      console.warn(`All audio extraction failed for ${filename}. Sending raw buffer as .mp4 to Whisper...`);
+      uploadFilename = filename.replace(/\.\w+$/, ".mp4");
     }
   }
 
@@ -66,12 +87,30 @@ export async function transcribeVideo(
     type: getMimeType(uploadFilename),
   });
 
-  const response = await openai.audio.transcriptions.create({
-    model: "whisper-1",
-    file,
-    response_format: "verbose_json",
-    timestamp_granularities: ["word", "segment"],
-  });
+  let response;
+  try {
+    response = await openai.audio.transcriptions.create({
+      model: "whisper-1",
+      file,
+      response_format: "verbose_json",
+      timestamp_granularities: ["word", "segment"],
+    });
+  } catch (whisperErr) {
+    // If Whisper rejects the format, return empty transcription instead of crashing the pipeline
+    const msg = whisperErr instanceof Error ? whisperErr.message : String(whisperErr);
+    if (msg.includes("Invalid file format") || msg.includes("could not be decoded")) {
+      console.error(`Whisper rejected ${uploadFilename}: ${msg}. Returning empty transcription.`);
+      return {
+        text: "",
+        segments: [],
+        words: [],
+        language: "en",
+        duration: 0,
+        isSpanish: false,
+      };
+    }
+    throw whisperErr;
+  }
 
   // Extract segments with timestamps
   const segments: TranscriptSegment[] = (

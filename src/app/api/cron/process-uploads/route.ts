@@ -73,10 +73,20 @@ export async function GET(request: NextRequest) {
         .lt("updated_at", archiveCutoff)
         .select("id");
 
+      // Recover content stuck at "publishing" for more than 15 minutes
+      const stuckCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const { data: stuckContent } = await supabase
+        .from("content")
+        .update({ status: "approved", updated_at: new Date().toISOString() })
+        .eq("status", "publishing")
+        .lt("updated_at", stuckCutoff)
+        .select("id");
+
       return {
         new_files_detected: newRecords,
         processed,
         archived: archived?.length || 0,
+        recovered_publishing: stuckContent?.length || 0,
         errors: errors.length > 0 ? errors : undefined,
       };
     });

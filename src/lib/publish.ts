@@ -68,11 +68,24 @@ export async function publishContent(
     tiktok: "tiktok_publish_id",
   };
 
+  // Pre-check: skip TikTok if no token exists (avoid crashing the whole publish)
+  const { data: tiktokToken } = await supabase
+    .from("platform_tokens")
+    .select("id")
+    .eq("platform", "tiktok")
+    .maybeSingle();
+
   for (const platform of targetPlatforms) {
     // Skip platforms that already succeeded (have a post ID)
     const existingPostId = content[platformPostIdFields[platform]];
     if (existingPostId) {
       results[platform] = { success: true, id: existingPostId as string, skipped: true };
+      continue;
+    }
+
+    // Skip TikTok if not connected
+    if (platform === "tiktok" && !tiktokToken) {
+      results[platform] = { success: false, error: "TikTok not connected", skipped: true };
       continue;
     }
 
@@ -220,12 +233,13 @@ export async function publishContent(
     }
   }
 
-  // Determine final status
+  // Determine final status — only count platforms that were actually attempted (not skipped)
   const attempted = Object.entries(results).filter(([, r]) => !r.skipped);
   const anyNewSuccess = attempted.some(([, r]) => r.success);
   const anyFailure = attempted.some(([, r]) => !r.success);
-  const allSuccess = Object.values(results).every((r) => r.success); // includes skipped (already published)
-  const finalStatus = allSuccess ? "published" : anyNewSuccess ? "partially_published" : "failed";
+  // "published" if all attempted platforms succeeded (skip disconnected platforms)
+  const allAttemptedSuccess = attempted.length > 0 && attempted.every(([, r]) => r.success);
+  const finalStatus = allAttemptedSuccess ? "published" : anyNewSuccess ? "partially_published" : "approved";
 
   await supabase
     .from("content")
@@ -236,7 +250,7 @@ export async function publishContent(
     })
     .eq("id", contentId);
 
-  if (allSuccess) {
+  if (allAttemptedSuccess) {
     const successPlatforms = Object.entries(results)
       .filter(([, r]) => r.success)
       .map(([p]) => p);
