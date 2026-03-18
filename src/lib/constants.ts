@@ -38,9 +38,13 @@ export const PLATFORM_LIMITS = {
   },
 } as const;
 
-// Upload limits for Vercel processing (Pro plan: 500MB, 15-min timeout)
-export const MAX_VIDEO_SIZE_MB = 500;
+// Upload limits for Vercel processing (Pro plan: 3008MB RAM, 15-min timeout)
+// Single video peak: ~2x file size (buffer + FFmpeg). 1500MB cap leaves headroom.
+export const MAX_VIDEO_SIZE_MB = 1500;
 export const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
+
+// Large file threshold — process 1 at a time when files exceed this
+export const LARGE_VIDEO_THRESHOLD_MB = 600;
 
 // Photo size limit (25MB — reasonable for iPhone photos including HEIC)
 export const MAX_PHOTO_SIZE_MB = 25;

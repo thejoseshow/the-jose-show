@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { listNewFiles } from "@/lib/google-drive";
 import { processVideo, processPhoto } from "@/lib/pipeline";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY } from "@/lib/constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY, LARGE_VIDEO_THRESHOLD_MB } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -69,6 +69,16 @@ export async function POST(request: NextRequest) {
         })
       );
       const valid = batchVideos.filter((v): v is Video => v !== null);
+      // Drop to single concurrency if any file is large
+      if (valid.some((v) => v.size_bytes > LARGE_VIDEO_THRESHOLD_MB * 1024 * 1024)) {
+        for (const v of valid) {
+          try {
+            if (v.is_photo) await processPhoto(v); else await processVideo(v);
+            processed++;
+          } catch (e) { console.error("Drive webhook auto-process error:", e); }
+        }
+        continue;
+      }
       const results = await Promise.allSettled(
         valid.map((v) => (v.is_photo ? processPhoto(v) : processVideo(v)))
       );

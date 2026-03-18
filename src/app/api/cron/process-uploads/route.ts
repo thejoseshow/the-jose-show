@@ -4,7 +4,7 @@ import { listNewFiles } from "@/lib/google-drive";
 import { supabase } from "@/lib/supabase";
 import { processVideo, processPhoto } from "@/lib/pipeline";
 import { withCronLog } from "@/lib/cron-logger";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY } from "@/lib/constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY, LARGE_VIDEO_THRESHOLD_MB } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -45,10 +45,12 @@ export async function GET(request: NextRequest) {
       let processed = 0;
       const errors: string[] = [];
 
-      // Process videos in parallel batches
+      // Process videos in parallel batches (single concurrency for large files)
       const pending = (pendingVideos || []) as Video[];
-      for (let i = 0; i < pending.length; i += PIPELINE_CONCURRENCY) {
-        const batch = pending.slice(i, i + PIPELINE_CONCURRENCY);
+      const hasLargeFile = pending.some((v) => v.size_bytes > LARGE_VIDEO_THRESHOLD_MB * 1024 * 1024);
+      const concurrency = hasLargeFile ? 1 : PIPELINE_CONCURRENCY;
+      for (let i = 0; i < pending.length; i += concurrency) {
+        const batch = pending.slice(i, i + concurrency);
         const results = await Promise.allSettled(
           batch.map((v) => (v.is_photo ? processPhoto(v) : processVideo(v)))
         );
