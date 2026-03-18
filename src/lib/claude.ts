@@ -272,6 +272,13 @@ YOUTUBE SHORTS OPTIMIZATION:
 - Title should be punchy hooks: "Wait for it...", "This hit different", "When the music takes over 🔥"
 - DO NOT use long descriptive titles — Shorts need scroll-stopping hooks
 - youtube_description can be shorter (Shorts descriptions are less visible)
+` : ""}${!isShort && platforms.includes("facebook") ? `
+FACEBOOK LONG-FORM OPTIMIZATION:
+- This is a longer video — write a detailed, engaging Facebook post
+- Include a hook in the first line (this shows in previews)
+- Add 2-3 paragraphs of context about what's in the video
+- End with a call-to-action (comment, share, tag a friend)
+- Include relevant hashtags at the end
 ` : ""}
 CLIP TRANSCRIPT:
 ${clipTranscript}

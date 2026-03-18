@@ -39,9 +39,12 @@ export const PLATFORM_LIMITS = {
 } as const;
 
 // Upload limits for Vercel processing (Pro plan: 3008MB RAM, 15-min timeout)
-// Single video peak: ~2x file size (buffer + FFmpeg). 1500MB cap leaves headroom.
-export const MAX_VIDEO_SIZE_MB = 1500;
+// Single video peak: ~2x file size (buffer + FFmpeg). 1700MB cap covers largest files (1.64GB) with margin.
+export const MAX_VIDEO_SIZE_MB = 1700;
 export const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
+
+// Long-form threshold: videos >5 min get 16:9 treatment for YouTube + Facebook
+export const LONG_FORM_THRESHOLD_SECONDS = 300;
 
 // Large file threshold — process 1 at a time when files exceed this
 export const LARGE_VIDEO_THRESHOLD_MB = 600;

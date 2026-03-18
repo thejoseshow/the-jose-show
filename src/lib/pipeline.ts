@@ -8,7 +8,7 @@ import { uploadClip, uploadThumbnail, uploadRawVideo, downloadRawVideo } from ".
 import { notifyContentReady, notifyPipelineError } from "./notifications";
 import { withRetry } from "./retry";
 import { withQuota } from "./api-quota";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, LONG_FORM_THRESHOLD_SECONDS } from "./constants";
 import { getAppSetting } from "./settings";
 import { getNextOptimalSlot } from "./optimal-times";
 import { getLearningContext } from "./copy-learner";
@@ -230,9 +230,9 @@ export async function processVideo(video: Video): Promise<void> {
           ), { label: "Claude copy generation (EN)" });
         }
 
-        // Generate thumbnail for YouTube clips (with retry + quota)
+        // Generate thumbnail for YouTube and Facebook clips (with retry + quota)
         let thumbnailUrl: string | null = null;
-        if (rec.platforms.includes("youtube")) {
+        if (rec.platforms.includes("youtube") || rec.platforms.includes("facebook")) {
           try {
             const thumbPrompt = await generateThumbnailPrompt(
               rec.suggested_title,
@@ -408,14 +408,19 @@ export async function processVideo(video: Video): Promise<void> {
 async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpanish = false, contentStatus = "review", visualContext = "", learningContext = "") {
   const transcript = video.transcript || "";
   const duration = video.duration_seconds || 0;
+  const isLongForm = duration > LONG_FORM_THRESHOLD_SECONDS;
 
-  // Extract full video as compressed clip (fits under storage limits)
+  // Long-form (>5 min): 16:9, full duration, YouTube + Facebook only
+  // Short-form: 9:16, capped at 480s, all platforms
   const clipResult = await extractClip(videoBuffer, video.filename, {
     startTime: 0,
     endTime: duration,
-    aspectRatio: "9:16",
-    maxDuration: 480,
+    aspectRatio: isLongForm ? "16:9" : "9:16",
+    ...(isLongForm ? {} : { maxDuration: 480 }),
   });
+
+  // Free memory after extraction (~500MB savings for large files)
+  videoBuffer = null as unknown as Buffer;
 
   // Upload compressed clip to storage
   const clipStoragePath = `clips/${video.id}/${Date.now()}_full.mp4`;
@@ -426,8 +431,39 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     ? transcript.slice(0, 80).replace(/\s+/g, " ").trim()
     : "Untitled Video";
 
-  const platforms: Platform[] = ["youtube", "facebook", "instagram", "tiktok"];
+  // Long-form goes to YouTube + Facebook only (IG/TikTok don't support long videos well)
+  const platforms: Platform[] = isLongForm
+    ? ["youtube", "facebook"]
+    : ["youtube", "facebook", "instagram", "tiktok"];
   const isShort = duration <= 60;
+
+  // Generate thumbnail for long-form videos
+  let thumbnailUrl: string | null = null;
+  if (isLongForm) {
+    try {
+      const thumbPrompt = await generateThumbnailPrompt(titleHint, transcript.slice(0, 500));
+      const thumbBuffer = await withQuota("replicate", () =>
+        withRetry(() => generateThumbnail(thumbPrompt), { label: "Flux thumbnail (full video)", attempts: 2, baseDelayMs: 2000 })
+      );
+      const thumbPath = `thumbnails/${video.id}/${Date.now()}.png`;
+      thumbnailUrl = await uploadThumbnail(thumbPath, thumbBuffer);
+    } catch (err) {
+      console.error("Thumbnail generation failed for long-form video:", err);
+      // Fallback: extract a frame from the middle of the video
+      // Note: videoBuffer was freed, so we use clipResult.buffer instead
+      try {
+        const frameBuffer = await extractThumbnail(
+          clipResult.buffer,
+          "clip.mp4",
+          Math.min(duration / 2, 30)
+        );
+        const thumbPath = `thumbnails/${video.id}/${Date.now()}_frame.png`;
+        thumbnailUrl = await uploadThumbnail(thumbPath, frameBuffer);
+      } catch (frameErr) {
+        console.error("Frame extraction fallback also failed:", frameErr);
+      }
+    }
+  }
 
   // Generate EN copy
   const enCopy = await generatePlatformCopy(
@@ -454,6 +490,7 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     instagram_caption: enCopy.instagram_caption,
     tiktok_caption: enCopy.tiktok_caption,
     media_url: clipUrl,
+    thumbnail_url: thumbnailUrl,
     platforms,
     language: "en",
   }).select("id").single();
@@ -483,6 +520,7 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
         instagram_caption: esCopy.instagram_caption,
         tiktok_caption: esCopy.tiktok_caption,
         media_url: clipUrl,
+        thumbnail_url: thumbnailUrl,
         platforms,
         language: "es",
         parent_content_id: enRecord.id,

@@ -160,6 +160,8 @@ export async function publishContent(
             platformPostId = await postToFacebook({
               videoUrl: content.media_url,
               description: content.facebook_text || content.title,
+              title: content.youtube_title || content.title,
+              thumbnailUrl: content.thumbnail_url || undefined,
             });
           }
           await supabase

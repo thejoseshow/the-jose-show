@@ -103,6 +103,8 @@ async function getMetaToken(): Promise<string> {
 interface FacebookPostParams {
   videoUrl: string; // Publicly accessible URL
   description: string;
+  title?: string;        // Video title (shown on Facebook watch)
+  thumbnailUrl?: string; // Custom thumbnail URL
 }
 
 /**
@@ -110,7 +112,7 @@ interface FacebookPostParams {
  * Uses the resumable upload API for reliability.
  */
 export async function postToFacebook(params: FacebookPostParams): Promise<string> {
-  const { videoUrl, description } = params;
+  const { videoUrl, description, title, thumbnailUrl } = params;
   const token = await getMetaToken();
   const pageId = process.env.META_PAGE_ID;
   if (!pageId) throw new Error("Missing META_PAGE_ID");
@@ -165,6 +167,8 @@ export async function postToFacebook(params: FacebookPostParams): Promise<string
       upload_phase: "finish",
       upload_session_id,
       description,
+      ...(title && { title }),
+      ...(thumbnailUrl && { thumb: thumbnailUrl }),
     }),
   });
   const finishData = await finishRes.json();
