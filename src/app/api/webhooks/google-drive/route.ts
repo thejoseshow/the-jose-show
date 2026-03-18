@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { listNewFiles } from "@/lib/google-drive";
 import { processVideo, processPhoto } from "@/lib/pipeline";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "@/lib/constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -57,28 +57,24 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Auto-process up to 3 new videos immediately (Pro tier: 15-min timeout)
+    // Auto-process new videos in parallel batches (Pro tier: 15-min timeout)
     let processed = 0;
-    for (const videoId of newVideoIds.slice(0, 3)) {
-      try {
-        const { data: videoRow } = await supabase
-          .from("videos")
-          .select("*")
-          .eq("id", videoId)
-          .single();
-
-        if (videoRow) {
-          const v = videoRow as Video;
-          if (v.is_photo) {
-            await processPhoto(v);
-          } else {
-            await processVideo(v);
-          }
-          processed++;
-        }
-      } catch (processErr) {
-        console.error("Drive webhook auto-process error:", processErr);
-        // Non-fatal — video stays in "new" status for next cron/manual trigger
+    const idsToProcess = newVideoIds.slice(0, 4);
+    for (let i = 0; i < idsToProcess.length; i += PIPELINE_CONCURRENCY) {
+      const batchIds = idsToProcess.slice(i, i + PIPELINE_CONCURRENCY);
+      const batchVideos = await Promise.all(
+        batchIds.map(async (vid) => {
+          const { data } = await supabase.from("videos").select("*").eq("id", vid).single();
+          return data as Video | null;
+        })
+      );
+      const valid = batchVideos.filter((v): v is Video => v !== null);
+      const results = await Promise.allSettled(
+        valid.map((v) => (v.is_photo ? processPhoto(v) : processVideo(v)))
+      );
+      for (const r of results) {
+        if (r.status === "fulfilled") processed++;
+        else console.error("Drive webhook auto-process error:", (r as PromiseRejectedResult).reason);
       }
     }
 

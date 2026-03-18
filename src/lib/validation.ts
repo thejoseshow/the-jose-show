@@ -26,6 +26,8 @@ export const createContentSchema = z.object({
   scheduled_at: z.string().nullable().optional(),
   clip_id: z.string().uuid().nullable().optional(),
   event_id: z.string().uuid().nullable().optional(),
+  language: z.string().max(10).nullable().optional(),
+  parent_content_id: z.string().uuid().nullable().optional(),
 });
 
 export const updateContentSchema = z.object({

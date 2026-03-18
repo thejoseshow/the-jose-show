@@ -46,6 +46,9 @@ export const MAX_VIDEO_SIZE_BYTES = MAX_VIDEO_SIZE_MB * 1024 * 1024;
 export const MAX_PHOTO_SIZE_MB = 25;
 export const MAX_PHOTO_SIZE_BYTES = MAX_PHOTO_SIZE_MB * 1024 * 1024;
 
+// Pipeline concurrency (2 videos in parallel, ~400-600MB peak, safe on Pro's 3008MB)
+export const PIPELINE_CONCURRENCY = 2;
+
 // Clip extraction defaults
 export const DEFAULT_CLIP_DURATION = { min: 30, max: 90 }; // seconds
 export const DEFAULT_ASPECT_RATIO = "9:16" as const;

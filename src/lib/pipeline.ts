@@ -2,7 +2,7 @@ import { supabase } from "./supabase";
 import { downloadFile, getFileMetadata } from "./google-drive";
 import { transcribeVideo, generateSRT, getSegmentsInRange, getWordsInRange } from "./whisper";
 import { extractClip, getVideoDuration, extractThumbnail, extractFrames, convertHeicToJpeg } from "./ffmpeg";
-import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generateThumbnailPrompt, analyzePhotoContent } from "./claude";
+import { analyzeTranscriptForClips, analyzeVideoFrames, generatePlatformCopy, generatePlatformCopyVariants, generateThumbnailPrompt, analyzePhotoContent } from "./claude";
 import { generateThumbnail } from "./thumbnails";
 import { uploadClip, uploadThumbnail, uploadRawVideo, downloadRawVideo } from "./storage";
 import { notifyContentReady, notifyPipelineError } from "./notifications";
@@ -12,7 +12,7 @@ import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "./constants";
 import { getAppSetting } from "./settings";
 import { getNextOptimalSlot } from "./optimal-times";
 import { getLearningContext } from "./copy-learner";
-import type { Video, Platform } from "./types";
+import type { Video, Platform, Content } from "./types";
 
 const MAX_RETRIES = 3;
 
@@ -141,6 +141,7 @@ export async function processVideo(video: Video): Promise<void> {
     const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
     const autoApproveThreshold = await getAppSetting<number>("auto_approve_threshold") ?? 7;
     const autoScheduleEnabled = await getAppSetting<boolean>("auto_schedule_enabled");
+    const abTestingEnabled = await getAppSetting<string>("ab_testing_enabled") === "true";
     const defaultContentStatus = autoApprove === true ? "approved" : "review";
 
     // Fetch learning context (top-performing content examples for Claude)
@@ -201,18 +202,35 @@ export async function processVideo(video: Video): Promise<void> {
           .select()
           .single();
 
-        // Generate platform copy (bilingual if video is in Spanish, with visual context)
-        const copy = await withRetry(() => generatePlatformCopy(
-          clipTranscript,
-          rec.suggested_title,
-          rec.platforms,
-          isSpanish,
-          visualContext,
-          isShort,
-          learningContext
-        ), { label: "Claude copy generation" });
+        // Generate platform copy — check A/B testing first
+        const useAB = abTestingEnabled && !isSpanish; // A/B only for EN content
+        let enCopy;
+        let abVariantB;
+        if (useAB) {
+          const variants = await withRetry(() => generatePlatformCopyVariants(
+            clipTranscript,
+            rec.suggested_title,
+            rec.platforms,
+            false,
+            visualContext,
+            isShort,
+            learningContext
+          ), { label: "Claude A/B copy generation" });
+          enCopy = variants.variantA;
+          abVariantB = variants.variantB;
+        } else {
+          enCopy = await withRetry(() => generatePlatformCopy(
+            clipTranscript,
+            rec.suggested_title,
+            rec.platforms,
+            false, // EN copy
+            visualContext,
+            isShort,
+            learningContext
+          ), { label: "Claude copy generation (EN)" });
+        }
 
-        // Generate thumbnail for YouTube clips
+        // Generate thumbnail for YouTube clips (with retry + quota)
         let thumbnailUrl: string | null = null;
         if (rec.platforms.includes("youtube")) {
           try {
@@ -220,12 +238,14 @@ export async function processVideo(video: Video): Promise<void> {
               rec.suggested_title,
               clipTranscript
             );
-            const thumbBuffer = await generateThumbnail(thumbPrompt);
+            const thumbBuffer = await withQuota("replicate", () =>
+              withRetry(() => generateThumbnail(thumbPrompt), { label: "Flux thumbnail", attempts: 2, baseDelayMs: 2000 })
+            );
             const thumbPath = `thumbnails/${videoId}/${Date.now()}.png`;
             thumbnailUrl = await uploadThumbnail(thumbPath, thumbBuffer);
           } catch (err) {
             // Thumbnail gen failure is non-critical - fall back to video frame
-            console.error("Thumbnail generation failed:", err);
+            console.error("Thumbnail generation failed (Flux + retry exhausted):", err);
             try {
               const frameBuffer = await extractThumbnail(
                 videoBuffer,
@@ -234,8 +254,8 @@ export async function processVideo(video: Video): Promise<void> {
               );
               const thumbPath = `thumbnails/${videoId}/${Date.now()}_frame.png`;
               thumbnailUrl = await uploadThumbnail(thumbPath, frameBuffer);
-            } catch {
-              // Skip thumbnail entirely
+            } catch (frameErr) {
+              console.error("Frame extraction fallback also failed:", frameErr);
             }
           }
         }
@@ -251,24 +271,87 @@ export async function processVideo(video: Video): Promise<void> {
           if (slot) scheduledAt = slot.toISOString();
         }
 
-        // Create content record
-        await supabase.from("content").insert({
+        // Create EN content record (variant A if A/B testing)
+        const abGroupId = useAB ? crypto.randomUUID() : null;
+        const { data: enRecord } = await supabase.from("content").insert({
           clip_id: clipRecord?.id || null,
           type: "video_clip",
           status: contentStatus,
           title: rec.suggested_title,
           description: rec.reasoning,
-          youtube_title: copy.youtube_title,
-          youtube_description: copy.youtube_description,
-          youtube_tags: copy.youtube_tags,
-          facebook_text: copy.facebook_text,
-          instagram_caption: copy.instagram_caption,
-          tiktok_caption: copy.tiktok_caption,
+          youtube_title: enCopy.youtube_title,
+          youtube_description: enCopy.youtube_description,
+          youtube_tags: enCopy.youtube_tags,
+          facebook_text: enCopy.facebook_text,
+          instagram_caption: enCopy.instagram_caption,
+          tiktok_caption: enCopy.tiktok_caption,
           media_url: clipUrl,
           thumbnail_url: thumbnailUrl,
           platforms: rec.platforms,
           scheduled_at: scheduledAt,
-        });
+          language: "en",
+          variant: useAB ? "A" : null,
+          ab_group_id: abGroupId,
+        }).select("id").single();
+
+        // Create A/B variant B if enabled
+        if (useAB && abVariantB && enRecord) {
+          await supabase.from("content").insert({
+            clip_id: clipRecord?.id || null,
+            type: "video_clip",
+            status: "review", // B variant always goes to review
+            title: rec.suggested_title,
+            description: rec.reasoning,
+            youtube_title: abVariantB.youtube_title,
+            youtube_description: abVariantB.youtube_description,
+            youtube_tags: abVariantB.youtube_tags,
+            facebook_text: abVariantB.facebook_text,
+            instagram_caption: abVariantB.instagram_caption,
+            tiktok_caption: abVariantB.tiktok_caption,
+            media_url: clipUrl,
+            thumbnail_url: thumbnailUrl,
+            platforms: rec.platforms,
+            language: "en",
+            variant: "B",
+            ab_group_id: abGroupId,
+          });
+        }
+
+        // If Spanish video, create ES version linked to the EN parent
+        if (isSpanish && enRecord) {
+          try {
+            const esCopy = await withRetry(() => generatePlatformCopy(
+              clipTranscript,
+              rec.suggested_title,
+              rec.platforms,
+              true, // ES copy
+              visualContext,
+              isShort,
+              learningContext
+            ), { label: "Claude copy generation (ES)" });
+
+            await supabase.from("content").insert({
+              clip_id: clipRecord?.id || null,
+              type: "video_clip",
+              status: "review",
+              title: rec.suggested_title,
+              description: rec.reasoning,
+              youtube_title: esCopy.youtube_title,
+              youtube_description: esCopy.youtube_description,
+              youtube_tags: esCopy.youtube_tags,
+              facebook_text: esCopy.facebook_text,
+              instagram_caption: esCopy.instagram_caption,
+              tiktok_caption: esCopy.tiktok_caption,
+              media_url: clipUrl,
+              thumbnail_url: thumbnailUrl,
+              platforms: rec.platforms,
+              language: "es",
+              parent_content_id: enRecord.id,
+            });
+          } catch (esErr) {
+            console.error("Failed to generate ES copy for clip:", esErr);
+          }
+        }
 
         contentCreated++;
       } catch (clipErr) {
@@ -345,32 +428,69 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
 
   const platforms: Platform[] = ["youtube", "facebook", "instagram", "tiktok"];
   const isShort = duration <= 60;
-  const copy = await generatePlatformCopy(
+
+  // Generate EN copy
+  const enCopy = await generatePlatformCopy(
     transcript.slice(0, 1000),
     titleHint,
     platforms,
-    isSpanish,
+    false,
     visualContext,
     isShort,
     learningContext
   );
 
-  const title = copy.youtube_title || titleHint;
+  const title = enCopy.youtube_title || titleHint;
 
-  await supabase.from("content").insert({
+  const { data: enRecord } = await supabase.from("content").insert({
     type: "video_clip",
     status: contentStatus,
     title,
-    description: copy.youtube_description || "Full video",
-    youtube_title: copy.youtube_title,
-    youtube_description: copy.youtube_description,
-    youtube_tags: copy.youtube_tags,
-    facebook_text: copy.facebook_text,
-    instagram_caption: copy.instagram_caption,
-    tiktok_caption: copy.tiktok_caption,
+    description: enCopy.youtube_description || "Full video",
+    youtube_title: enCopy.youtube_title,
+    youtube_description: enCopy.youtube_description,
+    youtube_tags: enCopy.youtube_tags,
+    facebook_text: enCopy.facebook_text,
+    instagram_caption: enCopy.instagram_caption,
+    tiktok_caption: enCopy.tiktok_caption,
     media_url: clipUrl,
     platforms,
-  });
+    language: "en",
+  }).select("id").single();
+
+  // If Spanish, create ES version
+  if (isSpanish && enRecord) {
+    try {
+      const esCopy = await generatePlatformCopy(
+        transcript.slice(0, 1000),
+        titleHint,
+        platforms,
+        true,
+        visualContext,
+        isShort,
+        learningContext
+      );
+
+      await supabase.from("content").insert({
+        type: "video_clip",
+        status: "review",
+        title: esCopy.youtube_title || title,
+        description: esCopy.youtube_description || "Full video (ES)",
+        youtube_title: esCopy.youtube_title,
+        youtube_description: esCopy.youtube_description,
+        youtube_tags: esCopy.youtube_tags,
+        facebook_text: esCopy.facebook_text,
+        instagram_caption: esCopy.instagram_caption,
+        tiktok_caption: esCopy.tiktok_caption,
+        media_url: clipUrl,
+        platforms,
+        language: "es",
+        parent_content_id: enRecord.id,
+      });
+    } catch (esErr) {
+      console.error("Failed to generate ES copy for full video:", esErr);
+    }
+  }
 }
 
 /**

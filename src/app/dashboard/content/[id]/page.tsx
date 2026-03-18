@@ -71,6 +71,8 @@ export default function ContentDetailPage({
   const [renderJob, setRenderJob] = useState<RenderJob | null>(null);
   const [rendering, setRendering] = useState(false);
   const [captionStyle, setCaptionStyle] = useState("default");
+  const [siblingId, setSiblingId] = useState<string | null>(null);
+  const [siblingLang, setSiblingLang] = useState<string | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -104,6 +106,26 @@ export default function ContentDetailPage({
       }
       const tData = await templatesRes.json();
       if (tData.success) setTemplates(tData.data || []);
+
+      // Check for translation sibling
+      if (data.success && data.data) {
+        const c = data.data as Content;
+        if (c.parent_content_id) {
+          // This is a child — sibling is the parent
+          setSiblingId(c.parent_content_id);
+          setSiblingLang(c.language === "es" ? "en" : "es");
+        } else if (c.language) {
+          // This might be a parent — check for child
+          const sibRes = await fetch(`/api/content?language=${c.language === "en" ? "es" : "en"}&limit=1`);
+          const sibData = await sibRes.json();
+          const sibling = (sibData.data || []).find((s: { parent_content_id: string }) => s.parent_content_id === c.id);
+          if (sibling) {
+            setSiblingId(sibling.id);
+            setSiblingLang(c.language === "en" ? "es" : "en");
+          }
+        }
+      }
+
       setLoading(false);
     }
     load();
@@ -380,6 +402,7 @@ export default function ContentDetailPage({
   const canPublish = content.status === "approved" || content.status === "partially_published";
   const isPublished = content.status === "published";
   const isPartiallyPublished = content.status === "partially_published";
+  const contentWithLang = content as Content & { parent_content_id?: string; language?: string; sibling_id?: string };
 
   return (
     <div className="space-y-6">
@@ -393,6 +416,18 @@ export default function ContentDetailPage({
           </Button>
           <h1 className="text-xl sm:text-2xl font-bold truncate">{content.title}</h1>
           <StatusBadge status={content.status} className="shrink-0" />
+          {contentWithLang.language && (
+            <Badge variant="outline" className={`shrink-0 text-xs ${contentWithLang.language === "es" ? "border-orange-500/50 text-orange-400" : "border-blue-500/50 text-blue-400"}`}>
+              {contentWithLang.language.toUpperCase()}
+            </Badge>
+          )}
+          {siblingId && (
+            <Link href={`/dashboard/content/${siblingId}`} className="shrink-0">
+              <Badge variant="outline" className="text-xs cursor-pointer hover:bg-accent border-green-500/50 text-green-400">
+                View {siblingLang?.toUpperCase()} version
+              </Badge>
+            </Link>
+          )}
         </div>
         <div className="flex gap-2 flex-wrap">
           {canApprove && (

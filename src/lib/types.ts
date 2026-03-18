@@ -113,6 +113,14 @@ export interface Content {
   template_id: string | null;
   // Render
   render_job_id: string | null;
+  // Bilingual
+  language: string | null;
+  parent_content_id: string | null;
+  // A/B testing
+  variant: "A" | "B" | null;
+  ab_group_id: string | null;
+  ab_winner: boolean | null;
+  ab_decided_at: string | null;
   // Metadata
   created_at: string;
   updated_at: string;
@@ -246,6 +254,10 @@ export interface ContentListItem {
   scheduled_at: string | null;
   published_at: string | null;
   created_at: string;
+  language: string | null;
+  variant: "A" | "B" | null;
+  ab_group_id: string | null;
+  parent_content_id: string | null;
 }
 
 export interface SessionPayload {

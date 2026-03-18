@@ -24,7 +24,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Plus, Video, CheckSquare, Send, Loader2 } from "lucide-react";
+import { Plus, Video, CheckSquare, Send, Loader2, XCircle, Trash2 } from "lucide-react";
 import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import type { ContentListItem, ContentStatus, Platform } from "@/lib/types";
@@ -63,16 +63,20 @@ function ContentPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [bulkRejecting, setBulkRejecting] = useState(false);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
   const [publishingId, setPublishingId] = useState<string | null>(null);
 
   const statusFilter = searchParams.get("status") || "";
   const platformFilter = searchParams.get("platform") || "";
+  const languageFilter = searchParams.get("language") || "";
 
   async function loadContent() {
     setLoading(true);
     const params = new URLSearchParams();
     if (statusFilter) params.set("status", statusFilter);
     if (platformFilter) params.set("platform", platformFilter);
+    if (languageFilter) params.set("language", languageFilter);
 
     const res = await fetch(`/api/content?${params}`);
     const data = await res.json();
@@ -83,7 +87,7 @@ function ContentPage() {
   useEffect(() => {
     loadContent();
     setSelectedIds(new Set());
-  }, [statusFilter, platformFilter]);
+  }, [statusFilter, platformFilter, languageFilter]);
 
   function setFilter(key: string, value: string) {
     const params = new URLSearchParams(searchParams.toString());
@@ -124,6 +128,53 @@ function ContentPage() {
     setBulkApproving(false);
   }
 
+  async function handleBulkReject() {
+    if (selectedIds.size === 0) return;
+    setBulkRejecting(true);
+    try {
+      const res = await fetch("/api/content/reject-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Rejected ${data.rejected} item(s)`);
+        setSelectedIds(new Set());
+        await loadContent();
+      } else {
+        toast.error("Bulk reject failed", { description: data.error });
+      }
+    } catch {
+      toast.error("Bulk reject failed");
+    }
+    setBulkRejecting(false);
+  }
+
+  async function handleBulkDelete() {
+    if (selectedIds.size === 0) return;
+    if (!confirm(`Delete ${selectedIds.size} item(s)? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    try {
+      const res = await fetch("/api/content/delete-bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids: Array.from(selectedIds) }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Deleted ${data.deleted} item(s)`);
+        setSelectedIds(new Set());
+        await loadContent();
+      } else {
+        toast.error("Bulk delete failed", { description: data.error });
+      }
+    } catch {
+      toast.error("Bulk delete failed");
+    }
+    setBulkDeleting(false);
+  }
+
   async function handleQuickPublish(e: React.MouseEvent, itemId: string) {
     e.preventDefault();
     e.stopPropagation();
@@ -150,6 +201,12 @@ function ContentPage() {
   const approvableSelected = content.filter(
     (c) => selectedIds.has(c.id) && (c.status === "draft" || c.status === "review")
   );
+  const rejectableSelected = content.filter(
+    (c) => selectedIds.has(c.id) && (c.status === "review" || c.status === "approved")
+  );
+  const deletableSelected = content.filter(
+    (c) => selectedIds.has(c.id) && c.status !== "published" && c.status !== "partially_published"
+  );
 
   return (
     <div className="space-y-6">
@@ -157,19 +214,46 @@ function ContentPage() {
         <h1 className="text-2xl font-bold">Content Library</h1>
         <div className="flex gap-2">
           {selectedIds.size > 0 && (
-            <Button
-              onClick={handleBulkApprove}
-              disabled={bulkApproving || approvableSelected.length === 0}
-              variant="secondary"
-              className="bg-blue-600 hover:bg-blue-700 text-white"
-            >
-              {bulkApproving ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckSquare className="mr-1 h-4 w-4" />
-              )}
-              Approve {approvableSelected.length > 0 ? `(${approvableSelected.length})` : "Selected"}
-            </Button>
+            <>
+              <Button
+                onClick={handleBulkApprove}
+                disabled={bulkApproving || approvableSelected.length === 0}
+                variant="secondary"
+                className="bg-blue-600 hover:bg-blue-700 text-white"
+              >
+                {bulkApproving ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckSquare className="mr-1 h-4 w-4" />
+                )}
+                Approve {approvableSelected.length > 0 ? `(${approvableSelected.length})` : ""}
+              </Button>
+              <Button
+                onClick={handleBulkReject}
+                disabled={bulkRejecting || rejectableSelected.length === 0}
+                variant="secondary"
+                className="bg-yellow-600 hover:bg-yellow-700 text-white"
+              >
+                {bulkRejecting ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <XCircle className="mr-1 h-4 w-4" />
+                )}
+                Reject {rejectableSelected.length > 0 ? `(${rejectableSelected.length})` : ""}
+              </Button>
+              <Button
+                onClick={handleBulkDelete}
+                disabled={bulkDeleting || deletableSelected.length === 0}
+                variant="destructive"
+              >
+                {bulkDeleting ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <Trash2 className="mr-1 h-4 w-4" />
+                )}
+                Delete {deletableSelected.length > 0 ? `(${deletableSelected.length})` : ""}
+              </Button>
+            </>
           )}
           <Button onClick={() => setShowCreate(true)} className="bg-red-600 hover:bg-red-700">
             <Plus className="w-4 h-4 mr-1" />
@@ -201,6 +285,16 @@ function ContentPage() {
                 {opt.label}
               </SelectItem>
             ))}
+          </SelectContent>
+        </Select>
+        <Select value={languageFilter || "all"} onValueChange={(v) => setFilter("language", v)}>
+          <SelectTrigger className="w-full sm:w-[120px] h-9 text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">All Languages</SelectItem>
+            <SelectItem value="en">English</SelectItem>
+            <SelectItem value="es">Spanish</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -256,7 +350,19 @@ function ContentPage() {
                     </div>
                   </div>
                   <CardContent className="p-4">
-                    <h3 className="font-medium text-sm truncate">{item.title}</h3>
+                    <div className="flex items-center gap-1.5">
+                      <h3 className="font-medium text-sm truncate">{item.title}</h3>
+                      {item.language && (
+                        <Badge variant="outline" className={`text-[10px] px-1 py-0 shrink-0 ${item.language === "es" ? "border-orange-500/50 text-orange-400" : "border-blue-500/50 text-blue-400"}`}>
+                          {item.language.toUpperCase()}
+                        </Badge>
+                      )}
+                      {item.variant && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 shrink-0 border-purple-500/50 text-purple-400">
+                          {item.variant}
+                        </Badge>
+                      )}
+                    </div>
                     <div className="flex items-center justify-between mt-2">
                       <div className="flex gap-1">
                         {item.platforms.map((p) => (

@@ -44,6 +44,7 @@ export default function UploadsPage() {
   const [processing, setProcessing] = useState(false);
   const [processResult, setProcessResult] = useState<string | null>(null);
   const [retrying, setRetrying] = useState<string | null>(null);
+  const [reprocessing, setReprocessing] = useState<string | null>(null);
 
   async function loadVideos() {
     const res = await fetch("/api/pipeline/status");
@@ -77,6 +78,27 @@ export default function UploadsPage() {
       setProcessResult("Failed to trigger processing");
     }
     setProcessing(false);
+  }
+
+  async function handleReprocess(videoId: string) {
+    setReprocessing(videoId);
+    try {
+      const res = await fetch("/api/pipeline/reprocess", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ video_id: videoId }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setProcessResult("Reprocessing started — old clips deleted, re-running pipeline");
+      } else {
+        setProcessResult(data.error || "Reprocess failed");
+      }
+      await loadVideos();
+    } catch {
+      setProcessResult("Failed to reprocess video");
+    }
+    setReprocessing(null);
   }
 
   async function handleRetry(videoId: string) {
@@ -230,6 +252,26 @@ export default function UploadsPage() {
                           )}
                         </Button>
                       )}
+                    </div>
+                  )}
+
+                  {video.status === "clipped" && video.storage_path && (
+                    <div className="mt-2 flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleReprocess(video.id)}
+                        disabled={reprocessing === video.id}
+                      >
+                        {reprocessing === video.id ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <>
+                            <RotateCcw className="mr-1 h-3 w-3" />
+                            Reprocess
+                          </>
+                        )}
+                      </Button>
                     </div>
                   )}
                 </CardContent>

@@ -101,6 +101,8 @@ export default function SettingsPage() {
     instagram: { hour: 18, minute: 0 },
     tiktok: { hour: 19, minute: 0 },
   });
+  const [abTestingEnabled, setAbTestingEnabled] = useState(false);
+  const [abTestDays, setAbTestDays] = useState(3);
   const [autoApproveLoading, setAutoApproveLoading] = useState(true);
 
   const fetchConnections = useCallback(async () => {
@@ -135,6 +137,12 @@ export default function SettingsPage() {
         }
         if (data.data?.auto_schedule_enabled != null) {
           setAutoSchedule(data.data.auto_schedule_enabled === true || data.data.auto_schedule_enabled === "true");
+        }
+        if (data.data?.ab_testing_enabled != null) {
+          setAbTestingEnabled(data.data.ab_testing_enabled === true || data.data.ab_testing_enabled === "true");
+        }
+        if (data.data?.ab_test_days != null) {
+          setAbTestDays(parseInt(data.data.ab_test_days, 10) || 3);
         }
         if (data.data?.preferred_post_times) {
           const parsed = typeof data.data.preferred_post_times === "string"
@@ -257,6 +265,40 @@ export default function SettingsPage() {
     } catch {
       setAutoSchedule(!checked);
       toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleAbTestingToggle(checked: boolean) {
+    setAbTestingEnabled(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ab_testing_enabled: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "A/B testing enabled" : "A/B testing disabled");
+      } else {
+        setAbTestingEnabled(!checked);
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setAbTestingEnabled(!checked);
+      toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleAbTestDaysChange(value: number) {
+    setAbTestDays(value);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ab_test_days: value }),
+      });
+    } catch {
+      // Non-critical
     }
   }
 
@@ -550,6 +592,47 @@ export default function SettingsPage() {
                     </div>
                     <Switch checked={autoSchedule} onCheckedChange={handleAutoScheduleToggle} />
                   </div>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* A/B Testing */}
+          <Card>
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">A/B Testing</p>
+                  <p className="text-xs text-muted-foreground">
+                    Generate two caption/title variants per clip and compare performance
+                  </p>
+                </div>
+                {autoApproveLoading ? (
+                  <Skeleton className="h-5 w-10" />
+                ) : (
+                  <Switch checked={abTestingEnabled} onCheckedChange={handleAbTestingToggle} />
+                )}
+              </div>
+
+              {abTestingEnabled && (
+                <>
+                  <Separator />
+                  <div className="flex items-center justify-between">
+                    <Label className="text-sm">
+                      Evaluation Period: <span className="font-bold text-white">{abTestDays} day(s)</span>
+                    </Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={14}
+                      value={abTestDays}
+                      onChange={(e) => handleAbTestDaysChange(parseInt(e.target.value) || 3)}
+                      className="w-20 text-center"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    After this many days, the system picks a winner based on engagement.
+                  </p>
                 </>
               )}
             </CardContent>

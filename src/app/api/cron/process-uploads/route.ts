@@ -4,7 +4,7 @@ import { listNewFiles } from "@/lib/google-drive";
 import { supabase } from "@/lib/supabase";
 import { processVideo, processPhoto } from "@/lib/pipeline";
 import { withCronLog } from "@/lib/cron-logger";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES } from "@/lib/constants";
+import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 export const maxDuration = 800;
@@ -45,17 +45,20 @@ export async function GET(request: NextRequest) {
       let processed = 0;
       const errors: string[] = [];
 
-      for (const videoRow of pendingVideos || []) {
-        try {
-          const v = videoRow as Video;
-          if (v.is_photo) {
-            await processPhoto(v);
+      // Process videos in parallel batches
+      const pending = (pendingVideos || []) as Video[];
+      for (let i = 0; i < pending.length; i += PIPELINE_CONCURRENCY) {
+        const batch = pending.slice(i, i + PIPELINE_CONCURRENCY);
+        const results = await Promise.allSettled(
+          batch.map((v) => (v.is_photo ? processPhoto(v) : processVideo(v)))
+        );
+        for (let j = 0; j < results.length; j++) {
+          if (results[j].status === "fulfilled") {
+            processed++;
           } else {
-            await processVideo(v);
+            const reason = (results[j] as PromiseRejectedResult).reason;
+            errors.push(`${batch[j].filename}: ${reason instanceof Error ? reason.message : "Unknown error"}`);
           }
-          processed++;
-        } catch (err) {
-          errors.push(`${videoRow.filename}: ${err instanceof Error ? err.message : "Unknown error"}`);
         }
       }
 

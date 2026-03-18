@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import PlatformHealth from "@/components/PlatformHealth";
+import AICoachCard from "@/components/AICoachCard";
 import { StatusBadge } from "@/components/StatusBadge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -260,8 +261,9 @@ export default function DashboardPage() {
       )}
 
       {/* Bottom Row */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         <PlatformHealth />
+        <AICoachCard compact />
 
         <Card>
           <CardHeader className="pb-3">

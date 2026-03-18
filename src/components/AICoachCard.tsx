@@ -4,14 +4,20 @@ import { useEffect, useState, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Brain, RefreshCw, Loader2, Lightbulb, TrendingUp, Hash } from "lucide-react";
 import type { PerformanceInsight } from "@/lib/types";
 
-export default function AICoachCard() {
+type DateRange = "7" | "14" | "30" | "custom";
+
+export default function AICoachCard({ compact = false }: { compact?: boolean }) {
   const [insight, setInsight] = useState<PerformanceInsight | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [dateRange, setDateRange] = useState<DateRange>("7");
+  const [customStart, setCustomStart] = useState("");
+  const [customEnd, setCustomEnd] = useState("");
 
   const fetchLatest = useCallback(async () => {
     try {
@@ -33,17 +39,27 @@ export default function AICoachCard() {
   async function handleRefresh() {
     setRefreshing(true);
     try {
+      const body: Record<string, string> = {};
+      if (dateRange === "custom" && customStart && customEnd) {
+        body.start_date = customStart;
+        body.end_date = customEnd;
+      } else if (dateRange !== "custom") {
+        const days = parseInt(dateRange, 10);
+        const start = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
+        body.start_date = start.toISOString().split("T")[0];
+        body.end_date = new Date().toISOString().split("T")[0];
+      }
+
       const res = await fetch("/api/insights", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify(body),
       });
       const data = await res.json();
       if (data.success && data.data) {
-        // Wrap on-demand result in insight-like shape
         setInsight({
           id: "on-demand",
-          week_start: new Date().toISOString().split("T")[0],
+          week_start: body.start_date || new Date().toISOString().split("T")[0],
           insights_json: data.data,
           created_at: new Date().toISOString(),
         });
@@ -105,13 +121,73 @@ export default function AICoachCard() {
     year: "numeric",
   });
 
+  const dateRangeSelector = (
+    <div className="flex flex-wrap gap-1.5">
+      {(["7", "14", "30", "custom"] as DateRange[]).map((r) => (
+        <Button
+          key={r}
+          variant={dateRange === r ? "secondary" : "ghost"}
+          size="sm"
+          className="h-6 text-xs px-2"
+          onClick={() => setDateRange(r)}
+        >
+          {r === "custom" ? "Custom" : `${r}d`}
+        </Button>
+      ))}
+    </div>
+  );
+
+  // Compact mode: summary + top 2 insights + analyze button
+  if (compact) {
+    return (
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Brain className="w-4 h-4 text-purple-400" />
+              <CardTitle className="text-sm font-medium">AI Coach</CardTitle>
+            </div>
+            {dateRangeSelector}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {dateRange === "custom" && (
+            <div className="flex gap-2">
+              <Input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-7 text-xs" />
+              <Input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-7 text-xs" />
+            </div>
+          )}
+          {data.week_summary && (
+            <p className="text-xs text-muted-foreground line-clamp-2">{data.week_summary}</p>
+          )}
+          {data.top_insights.slice(0, 2).map((ins, i) => (
+            <p key={i} className="text-xs flex gap-1.5">
+              <span className="text-muted-foreground shrink-0">&bull;</span>
+              <span className="line-clamp-1">{ins}</span>
+            </p>
+          ))}
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full h-7 text-xs"
+            onClick={handleRefresh}
+            disabled={refreshing}
+          >
+            {refreshing ? <Loader2 className="h-3 w-3 animate-spin mr-1" /> : <RefreshCw className="h-3 w-3 mr-1" />}
+            Analyze
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <Card>
       <CardHeader>
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-2">
             <Brain className="w-5 h-5 text-purple-400" />
-            <CardTitle className="text-base">AI Coach — Week of {weekLabel}</CardTitle>
+            <CardTitle className="text-base">AI Coach — {weekLabel}</CardTitle>
           </div>
           <Button
             variant="outline"
@@ -122,6 +198,15 @@ export default function AICoachCard() {
             {refreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
             <span className="ml-1.5">Refresh</span>
           </Button>
+        </div>
+        <div className="flex items-center gap-3 mt-2">
+          {dateRangeSelector}
+          {dateRange === "custom" && (
+            <div className="flex gap-2">
+              <Input type="date" value={customStart} onChange={(e) => setCustomStart(e.target.value)} className="h-7 text-xs w-32" />
+              <Input type="date" value={customEnd} onChange={(e) => setCustomEnd(e.target.value)} className="h-7 text-xs w-32" />
+            </div>
+          )}
         </div>
       </CardHeader>
       <CardContent className="space-y-5">
@@ -138,10 +223,10 @@ export default function AICoachCard() {
               <span className="text-xs font-medium text-muted-foreground">Top Insights</span>
             </div>
             <ul className="space-y-1.5">
-              {data.top_insights.map((insight, i) => (
+              {data.top_insights.map((ins, i) => (
                 <li key={i} className="text-sm flex gap-2">
                   <span className="text-muted-foreground shrink-0">&bull;</span>
-                  <span>{insight}</span>
+                  <span>{ins}</span>
                 </li>
               ))}
             </ul>

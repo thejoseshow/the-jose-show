@@ -52,18 +52,20 @@ export async function GET(request: NextRequest) {
   // List content
   const status = searchParams.get("status") as ContentStatus | null;
   const platform = searchParams.get("platform") as Platform | null;
+  const language = searchParams.get("language");
   const limit = parseInt(searchParams.get("limit") || "20", 10);
   const offset = parseInt(searchParams.get("offset") || "0", 10);
   const sort = searchParams.get("sort") || "created_at";
 
   let query = supabase
     .from("content")
-    .select("id, title, type, status, thumbnail_url, platforms, scheduled_at, published_at, created_at", { count: "exact" })
+    .select("id, title, type, status, thumbnail_url, platforms, scheduled_at, published_at, created_at, language, variant, ab_group_id, parent_content_id", { count: "exact" })
     .order(sort, { ascending: false })
     .range(offset, offset + limit - 1);
 
   if (status) query = query.eq("status", status);
   if (platform) query = query.contains("platforms", [platform]);
+  if (language) query = query.eq("language", language);
 
   const { data, error, count } = await query;
 

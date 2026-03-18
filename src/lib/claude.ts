@@ -604,6 +604,95 @@ Respond ONLY with JSON:
   }
 }
 
+/**
+ * Generate two A/B variant sets of platform copy in a single Claude call.
+ * Variant A = safe/optimized, Variant B = experimental/different hook.
+ * Falls back to calling generatePlatformCopy() twice if structured output fails.
+ */
+export async function generatePlatformCopyVariants(
+  clipTranscript: string,
+  suggestedTitle: string,
+  platforms: Platform[],
+  isSpanish = false,
+  visualContext?: string,
+  isShort = false,
+  learningContext?: string
+): Promise<{ variantA: PlatformCopy; variantB: PlatformCopy }> {
+  const client = getClient();
+
+  try {
+    const response = await client.messages.create({
+      model: MODEL,
+      max_tokens: 4096,
+      system: BRAND_SYSTEM_PROMPT,
+      messages: [
+        {
+          role: "user",
+          content: `Generate TWO variants of social media copy for A/B testing this video clip.
+${learningContext ? `\n${learningContext}\n` : ""}
+CLIP TRANSCRIPT:
+${clipTranscript}
+
+SUGGESTED TITLE: ${suggestedTitle}
+TARGET PLATFORMS: ${platforms.join(", ")}
+LANGUAGE: ${isSpanish ? "Spanish primary, English secondary" : "English primary, sprinkle Dominican Spanish"}
+${visualContext ? `\nVISUAL CONTEXT: ${visualContext}\n` : ""}
+VARIANT A: Safe/optimized — use proven hooks, standard hashtags, clear value proposition.
+VARIANT B: Experimental — try a different angle, unexpected hook, edgier tone, or trending format.
+
+Both variants should be high-quality but DISTINCTLY DIFFERENT in approach.
+
+Respond ONLY with JSON:
+{
+  "variantA": {
+    "youtube_title": "...",
+    "youtube_description": "...",
+    "youtube_tags": [...],
+    "facebook_text": "...",
+    "instagram_caption": "...",
+    "tiktok_caption": "..."
+  },
+  "variantB": {
+    "youtube_title": "...",
+    "youtube_description": "...",
+    "youtube_tags": [...],
+    "facebook_text": "...",
+    "instagram_caption": "...",
+    "tiktok_caption": "..."
+  }
+}`,
+        },
+      ],
+    });
+
+    const text = response.content.find((b) => b.type === "text")?.text || "{}";
+    const jsonMatch = text.match(/\{[\s\S]*\}/);
+    if (jsonMatch) {
+      const parsed = JSON.parse(jsonMatch[0]);
+      if (parsed.variantA && parsed.variantB) {
+        const normalize = (v: Record<string, unknown>): PlatformCopy => ({
+          youtube_title: (v.youtube_title as string) || null,
+          youtube_description: (v.youtube_description as string) || null,
+          youtube_tags: (v.youtube_tags as string[]) || [],
+          facebook_text: (v.facebook_text as string) || suggestedTitle,
+          instagram_caption: (v.instagram_caption as string) || suggestedTitle,
+          tiktok_caption: (v.tiktok_caption as string) || suggestedTitle,
+        });
+        return { variantA: normalize(parsed.variantA), variantB: normalize(parsed.variantB) };
+      }
+    }
+  } catch (err) {
+    console.error("A/B variant generation failed, falling back to two calls:", err);
+  }
+
+  // Fallback: two separate calls
+  const [variantA, variantB] = await Promise.all([
+    generatePlatformCopy(clipTranscript, suggestedTitle, platforms, isSpanish, visualContext, isShort, learningContext),
+    generatePlatformCopy(clipTranscript, suggestedTitle, platforms, isSpanish, visualContext, isShort, learningContext),
+  ]);
+  return { variantA, variantB };
+}
+
 function formatTime(seconds: number): string {
   const m = Math.floor(seconds / 60);
   const s = Math.floor(seconds % 60);
