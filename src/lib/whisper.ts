@@ -29,16 +29,30 @@ export async function transcribeVideo(
 ): Promise<TranscriptionResult> {
   const openai = getOpenAI();
 
-  // Extract audio for files that exceed 25MB OR have problematic codecs (.mov from CapCut, etc.)
+  // Extract audio for files that exceed 25MB OR have non-mp4 formats (Whisper only accepts mp3/mp4/etc.)
   let uploadBuffer = fileBuffer;
   let uploadFilename = filename;
   const ext = filename.split(".").pop()?.toLowerCase();
-  const needsAudioExtract = fileBuffer.length > WHISPER_MAX_BYTES || ext === "mov" || ext === "avi" || ext === "mkv";
+  const whisperNativeFormats = new Set(["mp3", "mp4", "mpeg", "mpga", "m4a", "wav", "webm", "ogg", "oga", "flac"]);
+  const needsAudioExtract = fileBuffer.length > WHISPER_MAX_BYTES || !whisperNativeFormats.has(ext || "");
   if (needsAudioExtract) {
     console.log(`File ${filename} (${ext}, ${(fileBuffer.length / 1024 / 1024).toFixed(1)}MB) — extracting audio for Whisper compatibility...`);
-    uploadBuffer = await extractAudio(fileBuffer, filename);
-    uploadFilename = "audio.mp3";
-    console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+    try {
+      uploadBuffer = await extractAudio(fileBuffer, filename);
+      uploadFilename = "audio.mp3";
+      console.log(`Compressed audio: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+    } catch (audioErr) {
+      console.error(`Audio extraction failed for ${filename}, retrying with raw copy:`, audioErr);
+      // Fallback: try extracting with -c copy to m4a (avoids re-encoding)
+      try {
+        uploadBuffer = await extractAudio(fileBuffer, filename.replace(/\.\w+$/, ".mp4"));
+        uploadFilename = "audio.mp3";
+        console.log(`Fallback audio extraction: ${(uploadBuffer.length / 1024 / 1024).toFixed(1)}MB`);
+      } catch (fallbackErr) {
+        console.error(`Fallback audio extraction also failed:`, fallbackErr);
+        throw new Error(`Cannot extract audio from ${filename}: ${audioErr instanceof Error ? audioErr.message : "unknown"}`);
+      }
+    }
   }
 
   // If extracted audio still exceeds 25MB, use chunked transcription
