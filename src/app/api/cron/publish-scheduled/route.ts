@@ -15,7 +15,8 @@ export async function GET(request: NextRequest) {
     const result = await withCronLog("publish-scheduled", async () => {
       const now = new Date().toISOString();
 
-      const { data: scheduledContent, error } = await supabase
+      // Fetch approved content: scheduled items due now + unscheduled items (publish ASAP)
+      const { data: scheduledContent, error: schedErr } = await supabase
         .from("content")
         .select("id, platforms")
         .eq("status", "approved")
@@ -24,11 +25,23 @@ export async function GET(request: NextRequest) {
         .order("scheduled_at", { ascending: true })
         .limit(5);
 
-      if (error) throw new Error(error.message);
-      if (!scheduledContent?.length) return { published: 0 };
+      const { data: unscheduledContent, error: unschedErr } = await supabase
+        .from("content")
+        .select("id, platforms")
+        .eq("status", "approved")
+        .is("scheduled_at", null)
+        .not("media_url", "is", null)
+        .order("created_at", { ascending: true })
+        .limit(3);
+
+      if (schedErr) throw new Error(schedErr.message);
+      if (unschedErr) throw new Error(unschedErr.message);
+
+      const allContent = [...(scheduledContent || []), ...(unscheduledContent || [])];
+      if (!allContent.length) return { published: 0 };
 
       let published = 0;
-      for (const content of scheduledContent) {
+      for (const content of allContent) {
         try {
           await publishContent(content.id, content.platforms);
           published++;
@@ -37,7 +50,7 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      return { published, total: scheduledContent.length };
+      return { published, total: allContent.length };
     });
 
     return NextResponse.json({ success: true, ...result });
