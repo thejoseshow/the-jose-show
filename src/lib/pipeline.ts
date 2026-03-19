@@ -141,7 +141,7 @@ export async function processVideo(video: Video): Promise<void> {
     const autoApprove = await getAppSetting<boolean>("auto_approve_pipeline");
     const autoApproveThreshold = await getAppSetting<number>("auto_approve_threshold") ?? 7;
     const autoScheduleEnabled = await getAppSetting<boolean>("auto_schedule_enabled");
-    const abTestingEnabled = await getAppSetting<string>("ab_testing_enabled") === "true";
+    const abTestingEnabled = await getAppSetting<boolean>("ab_testing_enabled") === true;
     const defaultContentStatus = autoApprove === true ? "approved" : "review";
 
     // Fetch learning context (top-performing content examples for Claude)
@@ -262,7 +262,7 @@ export async function processVideo(video: Video): Promise<void> {
 
         // Threshold-based auto-approve: only auto-approve if score meets threshold
         const meetsThreshold = autoApprove === true && rec.score >= autoApproveThreshold;
-        const contentStatus = meetsThreshold ? "approved" : defaultContentStatus === "approved" ? "approved" : "review";
+        const contentStatus = meetsThreshold ? "approved" : "review";
 
         // Auto-schedule if enabled and content is approved
         let scheduledAt: string | null = null;

@@ -17,13 +17,19 @@ export async function GET() {
     return NextResponse.json({ success: false, error: error.message }, { status: 500 });
   }
 
-  // Convert rows to a key-value object, parsing JSON-stringified values
+  // Convert rows to a key-value object
+  // jsonb column auto-deserializes, but handle legacy double-encoded strings
   const settings: Record<string, unknown> = {};
   for (const row of data || []) {
-    try {
-      settings[row.key] = JSON.parse(row.value);
-    } catch {
-      settings[row.key] = row.value;
+    const raw = row.value;
+    if (typeof raw === "string") {
+      try {
+        settings[row.key] = JSON.parse(raw);
+      } catch {
+        settings[row.key] = raw;
+      }
+    } else {
+      settings[row.key] = raw;
     }
   }
 
@@ -45,7 +51,7 @@ export async function PATCH(request: NextRequest) {
         .from("app_settings")
         .upsert({
           key,
-          value: JSON.stringify(value),
+          value, // jsonb column — pass native type directly
           updated_at: new Date().toISOString(),
         });
     }

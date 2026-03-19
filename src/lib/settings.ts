@@ -8,11 +8,18 @@ export async function getAppSetting<T = unknown>(key: string): Promise<T | null>
     .single();
 
   if (error || !data) return null;
-  try {
-    return JSON.parse(data.value) as T;
-  } catch {
-    return data.value as T;
+
+  // jsonb column: Supabase auto-deserializes, but legacy values may be
+  // double-encoded strings from previous bug. Handle both cases.
+  const raw = data.value;
+  if (typeof raw === "string") {
+    try {
+      return JSON.parse(raw) as T;
+    } catch {
+      return raw as T;
+    }
   }
+  return raw as T;
 }
 
 export async function setAppSetting(key: string, value: unknown): Promise<void> {
@@ -20,7 +27,7 @@ export async function setAppSetting(key: string, value: unknown): Promise<void> 
     .from("app_settings")
     .upsert({
       key,
-      value: JSON.stringify(value),
+      value, // jsonb column — pass native type directly
       updated_at: new Date().toISOString(),
     });
 }
