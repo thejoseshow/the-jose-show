@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Camera, Loader2, Play, RotateCcw } from "lucide-react";
+import { LONG_FORM_THRESHOLD_SECONDS } from "@/lib/constants";
 import type { Video } from "@/lib/types";
 
 const STATUS_STYLES: Record<string, string> = {
@@ -197,6 +198,11 @@ export default function UploadsPage() {
                           {(video.size_bytes / (1024 * 1024)).toFixed(1)} MB
                           {video.duration_seconds &&
                             ` / ${Math.round(video.duration_seconds)}s`}
+                          {!video.is_photo && video.duration_seconds != null && (
+                            video.duration_seconds > LONG_FORM_THRESHOLD_SECONDS
+                              ? <span className="ml-1.5 text-cyan-400 font-medium">Long-form</span>
+                              : <span className="ml-1.5 text-muted-foreground/60">Short-form</span>
+                          )}
                         </p>
                       </div>
                     </div>

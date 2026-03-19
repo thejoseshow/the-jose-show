@@ -59,7 +59,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("content")
-    .select("id, title, type, status, thumbnail_url, platforms, scheduled_at, published_at, created_at, language, variant, ab_group_id, parent_content_id", { count: "exact" })
+    .select("id, title, type, status, thumbnail_url, platforms, scheduled_at, published_at, created_at, language, variant, ab_group_id, parent_content_id, clip_id, clips(aspect_ratio, duration_seconds)", { count: "exact" })
     .order(sort, { ascending: false })
     .range(offset, offset + limit - 1);
 

@@ -30,7 +30,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ArrowLeft, Loader2, Trash2, Wand2, Video, RefreshCw } from "lucide-react";
+import { ArrowLeft, Loader2, Trash2, Wand2, Video, RefreshCw, AlertTriangle } from "lucide-react";
+import { PLATFORM_LIMITS } from "@/lib/constants";
 import { Badge } from "@/components/ui/badge";
 import {
   convertWordTimestampsToFrames,
@@ -73,6 +74,7 @@ export default function ContentDetailPage({
   const [captionStyle, setCaptionStyle] = useState("default");
   const [siblingId, setSiblingId] = useState<string | null>(null);
   const [siblingLang, setSiblingLang] = useState<string | null>(null);
+  const [clip, setClip] = useState<Clip | null>(null);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
@@ -89,8 +91,9 @@ export default function ContentDetailPage({
       ]);
       const data = await contentRes.json();
       if (data.success && data.data) {
-        const c = data.data as Content & { publish_log?: PublishLog[] };
+        const c = data.data as Content & { publish_log?: PublishLog[]; clips?: Clip[] };
         setPublishLogs(c.publish_log || []);
+        if (c.clips?.[0]) setClip(c.clips[0]);
         setContent(c);
         setTitle(c.title);
         setDescription(c.description || "");
@@ -491,7 +494,13 @@ export default function ContentDetailPage({
         <div className="lg:col-span-1 space-y-4">
           <Card>
             <CardContent className="p-0">
-              <div className="aspect-[9/16] bg-muted rounded-xl overflow-hidden">
+              <div className={`${
+                clip?.aspect_ratio === "16:9" ? "aspect-video" :
+                clip?.aspect_ratio === "1:1" ? "aspect-square" :
+                // Fallback: infer from platforms (youtube+facebook only = likely 16:9)
+                (content.platforms.length <= 2 && content.platforms.every(p => p === "youtube" || p === "facebook"))
+                  ? "aspect-video" : "aspect-[9/16]"
+              } bg-muted rounded-xl overflow-hidden`}>
                 {content.media_url ? (
                   <video src={content.media_url} controls className="w-full h-full object-contain" />
                 ) : (
@@ -507,26 +516,39 @@ export default function ContentDetailPage({
           <div className="space-y-2">
             <Label>Platforms</Label>
             <div className="flex gap-2 flex-wrap">
-              {(["youtube", "facebook", "instagram", "tiktok"] as Platform[]).map((p) => (
-                <Button
-                  key={p}
-                  variant="outline"
-                  size="sm"
-                  onClick={() =>
-                    setPlatforms((prev) =>
-                      prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
-                    )
-                  }
-                  disabled={isPublished}
-                  className={
-                    platforms.includes(p)
-                      ? "border-red-500 bg-red-600/20 text-red-400"
-                      : ""
-                  }
-                >
-                  {p}
-                </Button>
-              ))}
+              {(["youtube", "facebook", "instagram", "tiktok"] as Platform[]).map((p) => {
+                const limit = PLATFORM_LIMITS[p];
+                const maxDur = "maxDuration" in limit ? limit.maxDuration : null;
+                const clipDuration = clip?.duration_seconds ?? 0;
+                const overLimit = maxDur != null && clipDuration > maxDur;
+                return (
+                  <div key={p} className="flex flex-col items-center">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        setPlatforms((prev) =>
+                          prev.includes(p) ? prev.filter((x) => x !== p) : [...prev, p]
+                        )
+                      }
+                      disabled={isPublished}
+                      className={
+                        platforms.includes(p)
+                          ? "border-red-500 bg-red-600/20 text-red-400"
+                          : ""
+                      }
+                    >
+                      {p}
+                    </Button>
+                    {overLimit && platforms.includes(p) && (
+                      <span className="text-[10px] text-amber-400 flex items-center gap-0.5 mt-1">
+                        <AlertTriangle className="h-3 w-3" />
+                        {Math.round(clipDuration)}s &gt; {maxDur}s max
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
 

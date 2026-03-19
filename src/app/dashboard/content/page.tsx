@@ -352,6 +352,11 @@ function ContentPage() {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-1.5">
                       <h3 className="font-medium text-sm truncate">{item.title}</h3>
+                      {item.clips?.[0]?.aspect_ratio === "16:9" && (
+                        <Badge variant="outline" className="text-[10px] px-1 py-0 shrink-0 border-cyan-500/50 text-cyan-400">
+                          16:9
+                        </Badge>
+                      )}
                       {item.language && (
                         <Badge variant="outline" className={`text-[10px] px-1 py-0 shrink-0 ${item.language === "es" ? "border-orange-500/50 text-orange-400" : "border-blue-500/50 text-blue-400"}`}>
                           {item.language.toUpperCase()}

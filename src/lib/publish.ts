@@ -4,6 +4,7 @@ import { postToFacebook, postToInstagram, postPhotoToFacebook, postPhotoToInstag
 import { postToTikTok } from "./tiktok";
 import { notifyPublishSuccess, notifyPublishPartialFailure } from "./notifications";
 import { validateMediaUrl, sanitizeError } from "./validation";
+import { PLATFORM_LIMITS } from "./constants";
 import type { Platform } from "./types";
 
 /**
@@ -60,6 +61,17 @@ export async function publishContent(
 
   const results: Record<string, { success: boolean; id?: string; error?: string; skipped?: boolean }> = {};
 
+  // Fetch clip duration for platform limit checks
+  let clipDuration: number | null = null;
+  if (content.clip_id) {
+    const { data: clipData } = await supabase
+      .from("clips")
+      .select("duration_seconds")
+      .eq("id", content.clip_id)
+      .single();
+    clipDuration = clipData?.duration_seconds ?? null;
+  }
+
   // Map of platform → existing post ID field
   const platformPostIdFields: Record<Platform, string> = {
     youtube: "youtube_video_id",
@@ -86,6 +98,18 @@ export async function publishContent(
     // Skip TikTok if not connected
     if (platform === "tiktok" && !tiktokToken) {
       results[platform] = { success: false, error: "TikTok not connected", skipped: true };
+      continue;
+    }
+
+    // Skip platforms where clip exceeds max duration
+    const platformLimit = PLATFORM_LIMITS[platform];
+    const maxDuration = "maxDuration" in platformLimit ? platformLimit.maxDuration : null;
+    if (clipDuration != null && maxDuration != null && clipDuration > maxDuration) {
+      results[platform] = {
+        success: false,
+        error: `Video duration (${Math.round(clipDuration)}s) exceeds ${platform} max (${maxDuration}s)`,
+        skipped: true,
+      };
       continue;
     }
 

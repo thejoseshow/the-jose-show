@@ -426,6 +426,22 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
   const clipStoragePath = `clips/${video.id}/${Date.now()}_full.mp4`;
   const clipUrl = await uploadClip(clipStoragePath, clipResult.buffer, "video/mp4");
 
+  // Insert clip record so downstream joins (aspect_ratio, duration) work
+  const videoWords = video.word_timestamps || [];
+  const { data: clipRecord } = await supabase
+    .from("clips")
+    .insert({
+      video_id: video.id,
+      storage_path: clipStoragePath,
+      start_time: 0,
+      end_time: duration,
+      duration_seconds: clipResult.duration,
+      aspect_ratio: clipResult.aspectRatio,
+      word_timestamps: videoWords.length > 0 ? videoWords : null,
+    })
+    .select()
+    .single();
+
   // Derive a readable title hint from transcript (not the ugly filename)
   const titleHint = transcript.length > 10
     ? transcript.slice(0, 80).replace(/\s+/g, " ").trim()
@@ -479,6 +495,7 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
   const title = enCopy.youtube_title || titleHint;
 
   const { data: enRecord } = await supabase.from("content").insert({
+    clip_id: clipRecord?.id || null,
     type: "video_clip",
     status: contentStatus,
     title,
@@ -509,6 +526,7 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
       );
 
       await supabase.from("content").insert({
+        clip_id: clipRecord?.id || null,
         type: "video_clip",
         status: "review",
         title: esCopy.youtube_title || title,

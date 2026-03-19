@@ -258,6 +258,8 @@ export interface ContentListItem {
   variant: "A" | "B" | null;
   ab_group_id: string | null;
   parent_content_id: string | null;
+  clip_id: string | null;
+  clips: { aspect_ratio: string; duration_seconds: number }[];
 }
 
 export interface SessionPayload {
