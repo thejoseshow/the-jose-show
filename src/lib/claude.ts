@@ -205,8 +205,13 @@ For each clip, provide:
 4. A catchy title about the ACTIVITY (dancing, footwork, vibes, teaching, etc.)
 5. Which platforms it's best for
 
+PLATFORM RULES:
+- Short clips (under 60s): include "tiktok", "instagram", "facebook"
+- ALL clips should also include "youtube" — short clips become YouTube Shorts, longer clips become regular YouTube videos
+- For videos over 5 minutes, recommend at least one longer YouTube clip (up to 8 min) with platforms ["youtube", "facebook"]
+
 Respond ONLY with a JSON array. Example:
-[{"start_time": 0.0, "end_time": 40.0, "score": 9, "reasoning": "Jose's footwork is clean, great energy", "suggested_title": "Working on my Dominican footwork 🔥", "platforms": ["tiktok", "instagram", "facebook"]}]
+[{"start_time": 0.0, "end_time": 40.0, "score": 9, "reasoning": "Jose's footwork is clean, great energy", "suggested_title": "Working on my Dominican footwork 🔥", "platforms": ["youtube", "tiktok", "instagram", "facebook"]}]
 
 Prioritize moments with:
 - Impressive footwork or dance moves
