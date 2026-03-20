@@ -28,18 +28,22 @@ export async function getAuthenticatedClient() {
     expiry_date: token.expires_at ? new Date(token.expires_at).getTime() : undefined,
   });
 
-  // Auto-refresh if expired
-  oauth2Client.on("tokens", async (tokens) => {
-    await supabase
+  // Persist refreshed tokens (access + refresh if rotated)
+  oauth2Client.on("tokens", (tokens) => {
+    supabase
       .from("platform_tokens")
       .update({
         access_token: tokens.access_token || token.access_token,
+        refresh_token: tokens.refresh_token || token.refresh_token,
         expires_at: tokens.expiry_date
           ? new Date(tokens.expiry_date).toISOString()
           : token.expires_at,
         updated_at: new Date().toISOString(),
       })
-      .eq("id", token.id);
+      .eq("id", token.id)
+      .then(({ error }) => {
+        if (error) console.error("Failed to persist Google token refresh:", error.message);
+      });
   });
 
   return oauth2Client;

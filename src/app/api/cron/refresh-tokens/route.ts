@@ -3,6 +3,7 @@ import { verifyCronSecret } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 import { refreshMetaToken } from "@/lib/meta";
 import { refreshTikTokToken } from "@/lib/tiktok";
+import { getAuthenticatedClient } from "@/lib/google-drive";
 import { notifyPipelineError } from "@/lib/notifications";
 import { withCronLog } from "@/lib/cron-logger";
 
@@ -76,7 +77,17 @@ export async function GET(request: NextRequest) {
       results.drive_watch = { refreshed: false, error: err instanceof Error ? err.message : "Unknown error" };
     }
 
-    results.google = { refreshed: false };
+    // Proactively refresh Google token (triggers on("tokens") handler to persist)
+    try {
+      const auth = await getAuthenticatedClient();
+      const { token } = await auth.getAccessToken();
+      results.google = { refreshed: !!token };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : "Unknown error";
+      results.google = { refreshed: false, error: errorMsg };
+      await notifyPipelineError("Google Token Refresh", errorMsg).catch(console.error);
+    }
+
     return results;
   });
 

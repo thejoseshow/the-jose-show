@@ -2,6 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { publishContent } from "@/lib/publish";
 import { publishSchema, validateBody } from "@/lib/validation";
 
+// YouTube uploads can take minutes for large files
+export const maxDuration = 300;
+
 // POST /api/content/[id]/publish - Publish content to selected platforms
 export async function POST(
   request: NextRequest,
