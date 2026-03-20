@@ -11,6 +11,7 @@ interface YouTubeUploadParams {
   privacyStatus?: "private" | "unlisted" | "public";
   videoBuffer: Buffer;
   thumbnailBuffer?: Buffer;
+  language?: string;
 }
 
 export async function uploadToYouTube(params: YouTubeUploadParams): Promise<string> {
@@ -22,6 +23,7 @@ export async function uploadToYouTube(params: YouTubeUploadParams): Promise<stri
     privacyStatus = "public",
     videoBuffer,
     thumbnailBuffer,
+    language = "en",
   } = params;
 
   const auth = await getAuthenticatedClient();
@@ -37,7 +39,7 @@ export async function uploadToYouTube(params: YouTubeUploadParams): Promise<stri
         description,
         tags,
         categoryId,
-        defaultLanguage: "en",
+        defaultLanguage: language,
       },
       status: {
         privacyStatus,

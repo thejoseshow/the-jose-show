@@ -134,27 +134,26 @@ export async function publishContent(
           if (isPhotoPost) throw new Error("YouTube does not support photo posts");
           if (!content.media_url) throw new Error("No media URL");
           const videoRes = await fetch(content.media_url);
+          if (!videoRes.ok) throw new Error(`Failed to fetch video: ${videoRes.status}`);
           const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
 
           let thumbnailBuffer: Buffer | undefined;
           if (content.thumbnail_url) {
-            const thumbRes = await fetch(content.thumbnail_url);
-            thumbnailBuffer = Buffer.from(await thumbRes.arrayBuffer());
+            try {
+              const thumbRes = await fetch(content.thumbnail_url);
+              if (thumbRes.ok) {
+                thumbnailBuffer = Buffer.from(await thumbRes.arrayBuffer());
+              }
+            } catch {
+              console.error("Thumbnail fetch failed (non-critical)");
+            }
           }
 
           // Safety-net: ensure #Shorts tag for short clips (<= 60s)
           let ytTags: string[] = content.youtube_tags || [];
-          if (content.clip_id) {
-            const { data: clip } = await supabase
-              .from("clips")
-              .select("duration_seconds")
-              .eq("id", content.clip_id)
-              .single();
-
-            if (clip?.duration_seconds && clip.duration_seconds <= 60) {
-              if (!ytTags.some((t: string) => t.toLowerCase() === "#shorts")) {
-                ytTags = ["#Shorts", ...ytTags];
-              }
+          if (clipDuration != null && clipDuration <= 60) {
+            if (!ytTags.some((t: string) => t.toLowerCase() === "#shorts")) {
+              ytTags = ["#Shorts", ...ytTags];
             }
           }
 
@@ -164,6 +163,7 @@ export async function publishContent(
             tags: ytTags,
             videoBuffer,
             thumbnailBuffer,
+            language: content.language || "en",
           });
 
           await supabase
