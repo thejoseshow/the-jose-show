@@ -15,7 +15,7 @@ export async function generateThumbnail(prompt: string): Promise<Buffer> {
 
   const output = await replicate.run("black-forest-labs/flux-schnell", {
     input: {
-      prompt: `YouTube thumbnail, ${prompt}, bold text overlay, high contrast, 16:9 aspect ratio, professional quality, eye-catching colors`,
+      prompt: `YouTube thumbnail 1280x720, one person's face close-up showing strong emotion, ${prompt}, minimal bold text 3-5 words max, extremely high contrast, vibrant saturated colors, clean uncluttered background, professional quality`,
       num_outputs: 1,
       aspect_ratio: "16:9",
       output_format: "png",

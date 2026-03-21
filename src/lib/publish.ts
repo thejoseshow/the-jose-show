@@ -149,6 +149,23 @@ export async function publishContent(
             }
           }
 
+          // Fetch SRT captions for long-form content (short-form has burned-in captions)
+          let captionContent: string | undefined;
+          if (content.clip_id && clipDuration != null && clipDuration > 60) {
+            try {
+              const { data: captionData } = await supabase
+                .from("clips")
+                .select("srt_captions")
+                .eq("id", content.clip_id)
+                .single();
+              if (captionData?.srt_captions) {
+                captionContent = captionData.srt_captions;
+              }
+            } catch {
+              console.error("SRT caption fetch failed (non-critical)");
+            }
+          }
+
           // Safety-net: ensure #Shorts tag for short clips (<= 60s)
           let ytTags: string[] = content.youtube_tags || [];
           if (clipDuration != null && clipDuration <= 60) {
@@ -163,6 +180,7 @@ export async function publishContent(
             tags: ytTags,
             videoBuffer,
             thumbnailBuffer,
+            captionContent,
             language: content.language || "en",
           });
 

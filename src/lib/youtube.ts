@@ -11,6 +11,7 @@ interface YouTubeUploadParams {
   privacyStatus?: "private" | "unlisted" | "public";
   videoBuffer: Buffer;
   thumbnailBuffer?: Buffer;
+  captionContent?: string; // SRT string for subtitle upload
   language?: string;
 }
 
@@ -23,6 +24,7 @@ export async function uploadToYouTube(params: YouTubeUploadParams): Promise<stri
     privacyStatus = "public",
     videoBuffer,
     thumbnailBuffer,
+    captionContent,
     language = "en",
   } = params;
 
@@ -66,6 +68,28 @@ export async function uploadToYouTube(params: YouTubeUploadParams): Promise<stri
       });
     } catch (err) {
       console.error("Thumbnail upload failed (video still published):", err);
+    }
+  }
+
+  // Upload captions/subtitles if provided (non-blocking)
+  if (captionContent) {
+    try {
+      await youtube.captions.insert({
+        part: ["snippet"],
+        requestBody: {
+          snippet: {
+            videoId,
+            language,
+            name: language === "es" ? "Spanish" : "English",
+          },
+        },
+        media: {
+          mimeType: "application/x-subrip",
+          body: Readable.from(Buffer.from(captionContent, "utf-8")),
+        },
+      });
+    } catch (err) {
+      console.error("Caption upload failed (video still published):", err);
     }
   }
 

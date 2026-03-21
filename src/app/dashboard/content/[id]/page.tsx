@@ -489,6 +489,21 @@ export default function ContentDetailPage({
         </div>
       </div>
 
+      {/* YouTube link after publish */}
+      {content.youtube_video_id && (
+        <div className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600/15 border border-green-500/30 text-sm">
+          <span className="text-green-400 font-medium">YouTube:</span>
+          <a
+            href={`https://youtube.com/watch?v=${content.youtube_video_id}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-green-300 hover:text-green-200 underline truncate"
+          >
+            youtube.com/watch?v={content.youtube_video_id}
+          </a>
+        </div>
+      )}
+
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Media Preview */}
         <div className="lg:col-span-1 space-y-4">
@@ -770,25 +785,44 @@ export default function ContentDetailPage({
             </CardContent>
           </Card>
 
-          {platforms.includes("youtube") && (
-            <Card>
-              <CardHeader><CardTitle className="text-red-400">YouTube</CardTitle></CardHeader>
-              <CardContent className="space-y-4">
-                <div className="space-y-2">
-                  <Label className="flex justify-between">Title <span className="text-muted-foreground">{ytTitle.length}/100</span></Label>
-                  <Input value={ytTitle} onChange={(e) => setYtTitle(e.target.value)} placeholder={title} disabled={isPublished} maxLength={100} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Description</Label>
-                  <Textarea value={ytDescription} onChange={(e) => setYtDescription(e.target.value)} disabled={isPublished} rows={4} />
-                </div>
-                <div className="space-y-2">
-                  <Label>Tags (comma-separated)</Label>
-                  <Input value={ytTags} onChange={(e) => setYtTags(e.target.value)} disabled={isPublished} />
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {platforms.includes("youtube") && (() => {
+            const tagCount = ytTags ? ytTags.split(",").filter((t) => t.trim()).length : 0;
+            return (
+              <Card>
+                <CardHeader><CardTitle className="text-red-400">YouTube</CardTitle></CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <Label className="flex justify-between">
+                      Title
+                      <span className={ytTitle.length > 70 ? "text-amber-400" : "text-muted-foreground"}>
+                        {ytTitle.length}/100
+                        {ytTitle.length > 70 && " — hook may be cut off on mobile"}
+                      </span>
+                    </Label>
+                    <Input value={ytTitle} onChange={(e) => setYtTitle(e.target.value)} placeholder={title} disabled={isPublished} maxLength={100} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex justify-between">
+                      Description
+                      <span className={ytDescription.length > 4500 ? "text-amber-400" : "text-muted-foreground"}>
+                        {ytDescription.length}/5000
+                      </span>
+                    </Label>
+                    <Textarea value={ytDescription} onChange={(e) => setYtDescription(e.target.value)} disabled={isPublished} rows={6} maxLength={5000} />
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="flex justify-between">
+                      Tags (comma-separated)
+                      <span className={tagCount > 30 ? "text-red-400 font-medium" : "text-muted-foreground"}>
+                        {tagCount}/30{tagCount > 30 && " — over limit!"}
+                      </span>
+                    </Label>
+                    <Input value={ytTags} onChange={(e) => setYtTags(e.target.value)} disabled={isPublished} />
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {platforms.includes("facebook") && (
             <Card>

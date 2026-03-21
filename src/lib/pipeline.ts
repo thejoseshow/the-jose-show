@@ -159,6 +159,11 @@ export async function processVideo(video: Video): Promise<void> {
     const videoWords = video.word_timestamps || [];
 
     for (const rec of recommendations) {
+      // Safety net: YouTube is always a platform for every clip
+      if (!rec.platforms.includes("youtube")) {
+        rec.platforms = ["youtube", ...rec.platforms];
+      }
+
       try {
         // Get clip-specific captions
         const clipSegments = getSegmentsInRange(segments, rec.start_time, rec.end_time);
@@ -230,9 +235,9 @@ export async function processVideo(video: Video): Promise<void> {
           ), { label: "Claude copy generation (EN)" });
         }
 
-        // Generate thumbnail for YouTube and Facebook clips (with retry + quota)
+        // Generate thumbnail for all clips (with retry + quota)
         let thumbnailUrl: string | null = null;
-        if (rec.platforms.includes("youtube") || rec.platforms.includes("facebook")) {
+        {
           try {
             const thumbPrompt = await generateThumbnailPrompt(
               rec.suggested_title,
@@ -453,31 +458,29 @@ async function createFullVideoContent(video: Video, videoBuffer: Buffer, isSpani
     : ["youtube", "facebook", "instagram", "tiktok"];
   const isShort = duration <= 60;
 
-  // Generate thumbnail for long-form videos
+  // Generate thumbnail for all videos (long-form gets Flux, short-form gets frame extraction)
   let thumbnailUrl: string | null = null;
-  if (isLongForm) {
+  try {
+    const thumbPrompt = await generateThumbnailPrompt(titleHint, transcript.slice(0, 500));
+    const thumbBuffer = await withQuota("replicate", () =>
+      withRetry(() => generateThumbnail(thumbPrompt), { label: "Flux thumbnail (full video)", attempts: 2, baseDelayMs: 2000 })
+    );
+    const thumbPath = `thumbnails/${video.id}/${Date.now()}.png`;
+    thumbnailUrl = await uploadThumbnail(thumbPath, thumbBuffer);
+  } catch (err) {
+    console.error("Thumbnail generation failed:", err);
+    // Fallback: extract a frame from the video
+    // Note: videoBuffer was freed, so we use clipResult.buffer instead
     try {
-      const thumbPrompt = await generateThumbnailPrompt(titleHint, transcript.slice(0, 500));
-      const thumbBuffer = await withQuota("replicate", () =>
-        withRetry(() => generateThumbnail(thumbPrompt), { label: "Flux thumbnail (full video)", attempts: 2, baseDelayMs: 2000 })
+      const frameBuffer = await extractThumbnail(
+        clipResult.buffer,
+        "clip.mp4",
+        Math.min(duration / 2, 30)
       );
-      const thumbPath = `thumbnails/${video.id}/${Date.now()}.png`;
-      thumbnailUrl = await uploadThumbnail(thumbPath, thumbBuffer);
-    } catch (err) {
-      console.error("Thumbnail generation failed for long-form video:", err);
-      // Fallback: extract a frame from the middle of the video
-      // Note: videoBuffer was freed, so we use clipResult.buffer instead
-      try {
-        const frameBuffer = await extractThumbnail(
-          clipResult.buffer,
-          "clip.mp4",
-          Math.min(duration / 2, 30)
-        );
-        const thumbPath = `thumbnails/${video.id}/${Date.now()}_frame.png`;
-        thumbnailUrl = await uploadThumbnail(thumbPath, frameBuffer);
-      } catch (frameErr) {
-        console.error("Frame extraction fallback also failed:", frameErr);
-      }
+      const thumbPath = `thumbnails/${video.id}/${Date.now()}_frame.png`;
+      thumbnailUrl = await uploadThumbnail(thumbPath, frameBuffer);
+    } catch (frameErr) {
+      console.error("Frame extraction fallback also failed:", frameErr);
     }
   }
 

@@ -1,5 +1,5 @@
 import Anthropic from "@anthropic-ai/sdk";
-import { BRAND_VOICE, HASHTAG_SETS, PLATFORM_LIMITS } from "./constants";
+import { BRAND_VOICE, HASHTAG_SETS, PLATFORM_LIMITS, YOUTUBE_SOCIAL_LINKS, YOUTUBE_SUBSCRIBE_CTA, YOUTUBE_HASHTAGS } from "./constants";
 import type { TranscriptSegment, Platform } from "./types";
 
 let _client: Anthropic | null = null;
@@ -272,11 +272,27 @@ export async function generatePlatformCopy(
 ${learningContext ? `\n${learningContext}\n` : ""}${isShort && platforms.includes("youtube") ? `
 YOUTUBE SHORTS OPTIMIZATION:
 - This is a YouTube Short (vertical video under 60 seconds)
-- YouTube title MUST be under 70 characters — shorter = better for Shorts
+- YouTube title MUST be under 60 characters — shorter = better for Shorts
 - Include "#Shorts" as the FIRST tag in youtube_tags
-- Title should be punchy hooks: "Wait for it...", "This hit different", "When the music takes over 🔥"
-- DO NOT use long descriptive titles — Shorts need scroll-stopping hooks
-- youtube_description can be shorter (Shorts descriptions are less visible)
+- Title should be punchy scroll-stopping hooks with 1-2 hashtags at the end: "Wait for it... #bachata", "This hit different #footwork 🔥"
+- DO NOT use long descriptive titles — Shorts need hooks that stop the scroll
+- youtube_description: short hook paragraph + social links block:
+${YOUTUBE_SOCIAL_LINKS}
+${YOUTUBE_SUBSCRIBE_CTA}
+- Tags: "#Shorts" first, then 5-8 search-oriented tags ("bachata footwork tutorial" not just "dance")
+` : ""}${!isShort && platforms.includes("youtube") ? `
+YOUTUBE LONG-FORM SEO OPTIMIZATION:
+- YouTube title: 70-100 characters, put the hook/keyword in the FIRST 50 chars (that's what shows on mobile)
+- youtube_description MUST follow this structure:
+  1. Hook paragraph — primary keyword in the first 25 words
+  2. Brief content summary (2-3 sentences)
+  3. Timestamps placeholder: "0:00 Intro"
+  4. Social links block:
+${YOUTUBE_SOCIAL_LINKS}
+  5. Subscribe CTA:
+${YOUTUBE_SUBSCRIBE_CTA}
+  6. 3-5 hashtags at the end from: ${Object.values(YOUTUBE_HASHTAGS).flat().slice(0, 15).join(" ")}
+- Tags: 5-8 search-oriented tags ("bachata footwork tutorial", "dominican style dance", "learn bachata") — NOT generic ("dance", "fun")
 ` : ""}${!isShort && platforms.includes("facebook") ? `
 FACEBOOK LONG-FORM OPTIMIZATION:
 - This is a longer video — write a detailed, engaging Facebook post
@@ -491,17 +507,19 @@ export async function generateThumbnailPrompt(
     messages: [
       {
         role: "user",
-        content: `Generate a YouTube thumbnail image prompt for an AI image generator.
+        content: `Generate a YouTube thumbnail image prompt for an AI image generator (Flux).
 
 VIDEO TITLE: ${title}
 TRANSCRIPT EXCERPT: ${transcript.slice(0, 500)}
 
-The thumbnail should be:
-- Eye-catching and colorful
-- Include text overlay concept (the title or a hook)
-- Dominican/Latin culture themed
-- High contrast, bold
-- YouTube clickbait style but authentic
+The thumbnail MUST follow 2026 YouTube best practices:
+- ONE person's face close-up showing STRONG EMOTION (surprise, excitement, joy, intensity)
+- Minimal bold text: 3-5 words MAX, large readable font
+- Extremely high contrast, vibrant saturated colors
+- Clean uncluttered background — face is the focus
+- 1280x720 landscape format
+- Dominican/Latin culture themed where appropriate
+- NO busy backgrounds, NO small text, NO multiple people
 
 Respond with ONLY the image generation prompt (1-2 sentences, no quotes).`,
       },
@@ -713,10 +731,15 @@ function formatTime(seconds: number): string {
 
 function getDefaultCopy(title: string, platforms: Platform[]): PlatformCopy {
   const hashtags = [...HASHTAG_SETS.general, ...HASHTAG_SETS.culture].join(" ");
+  const ytHashtags = YOUTUBE_HASHTAGS.general.join(" ");
   return {
     youtube_title: platforms.includes("youtube") ? title : null,
-    youtube_description: platforms.includes("youtube") ? `${title}\n\nFollow The Jose Show!\n${hashtags}` : null,
-    youtube_tags: platforms.includes("youtube") ? ["thejoseshow", "dominican", "bachata", "entertainment"] : [],
+    youtube_description: platforms.includes("youtube")
+      ? `${title}\n\n${YOUTUBE_SOCIAL_LINKS}\n\n${YOUTUBE_SUBSCRIBE_CTA}\n\n${ytHashtags}`
+      : null,
+    youtube_tags: platforms.includes("youtube")
+      ? ["thejoseshow", "bachata dominican style", "dominican dancer", "south florida entertainment", "bachata footwork"]
+      : [],
     facebook_text: `${title} ${hashtags}`,
     instagram_caption: `${title}\n.\n.\n${hashtags}`,
     tiktok_caption: `${title} ${HASHTAG_SETS.general.slice(0, 5).join(" ")}`,

@@ -123,6 +123,25 @@ export const BRAND_VOICE = {
   ],
 } as const;
 
+// YouTube description footer — social links baked into every YouTube upload
+export const YOUTUBE_SOCIAL_LINKS = `Follow The Jose Show:
+Instagram: https://instagram.com/thejoseadelshow
+TikTok: https://tiktok.com/@thejoseshow_
+Facebook: https://facebook.com/thejoseadelshow
+Booking/Collabs: thejoseshow@gmail.com`;
+
+export const YOUTUBE_SUBSCRIBE_CTA = `Subscribe for daily bachata, Dominican culture, and South Florida vibes! Hit the bell so you never miss a video.`;
+
+// YouTube-optimized hashtags by content type (search-friendly, not vanity tags)
+export const YOUTUBE_HASHTAGS: Record<string, string[]> = {
+  dance: ["#bachata", "#bachatadominicana", "#bachatafootwork", "#latindance", "#socialdancing"],
+  events: ["#thejoseshow", "#southfloridaevents", "#bachataevent", "#latinnight", "#djlife"],
+  vlog: ["#thejoseshow", "#dailyvlog", "#dominicanlife", "#southflorida", "#lifevlog"],
+  teaching: ["#bachatalesson", "#bachatatutorial", "#learnbachata", "#dancetutorial", "#dominicanstyle"],
+  travel: ["#dominicanrepublic", "#DRtravel", "#caribbean", "#travelDR", "#islandlife"],
+  general: ["#thejoseshow", "#dominican", "#bachata", "#entertainment", "#latina"],
+};
+
 // Default hashtag sets by topic
 export const HASHTAG_SETS = {
   bachata: [
