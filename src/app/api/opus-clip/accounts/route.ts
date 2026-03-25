@@ -1,11 +1,12 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getSocialAccounts } from "@/lib/opus-clip";
+import { supabase } from "@/lib/supabase";
 
 /**
  * GET /api/opus-clip/accounts
  *
- * List connected social accounts from Opus Clip.
+ * List connected platform accounts from our system.
+ * (We no longer use Opus Clip's social account connections — we use our own.)
  */
 export async function GET() {
   const session = await getSession();
@@ -14,7 +15,15 @@ export async function GET() {
   }
 
   try {
-    const accounts = await getSocialAccounts();
+    const { data: tokens } = await supabase
+      .from("platform_tokens")
+      .select("platform, updated_at");
+
+    const accounts = (tokens || []).map((t) => ({
+      platform: t.platform,
+      connected: true,
+      lastUpdated: t.updated_at,
+    }));
 
     return NextResponse.json({ success: true, data: accounts });
   } catch (err) {
@@ -24,7 +33,7 @@ export async function GET() {
         error:
           err instanceof Error
             ? err.message
-            : "Failed to fetch social accounts",
+            : "Failed to fetch accounts",
       },
       { status: 500 }
     );

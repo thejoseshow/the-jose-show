@@ -3,13 +3,13 @@
 // ============================================================
 //
 // Monitors YouTube channels for new uploads and sends them to
-// Opus Clip for automatic clipping. Uses YouTube Data API v3
-// playlistItems.list (1 quota unit per call).
+// Opus Clip for clipping via Zapier webhook.
+// Uses YouTube Data API v3 playlistItems.list (1 quota unit per call).
 //
-// Env var: YOUTUBE_API_KEY
+// Env vars: YOUTUBE_API_KEY, ZAPIER_WEBHOOK_CLIP_VIDEO
 
 import { supabase } from "./supabase";
-import { opusFetch } from "./opus-clip";
+import { sendToOpusClip } from "./opus-clip";
 
 // --- Types ---
 
@@ -212,33 +212,16 @@ export async function getNewVideos(
 }
 
 /**
- * Send a YouTube video URL to Opus Clip for clipping.
- * Creates a new Opus Clip project from the video.
- */
-export async function sendToOpusClip(
-  videoUrl: string
-): Promise<{ projectId: string }> {
-  const res = await opusFetch<{ data: { id: string } }>(
-    "/api/clip-projects",
-    {
-      method: "POST",
-      body: JSON.stringify({ videoUrl }),
-    }
-  );
-  return { projectId: res.data.id };
-}
-
-/**
  * Check all enabled monitored channels for new videos.
  * For each new video found:
- *   1. Send to Opus Clip (if auto_clip enabled)
+ *   1. Send to Opus Clip via Zapier webhook (if auto_clip enabled)
  *   2. Update lastCheckedVideoId
  *   3. Log the activity
  */
 export async function checkAllChannels(): Promise<{
   channelsChecked: number;
   newVideosFound: number;
-  clipsCreated: number;
+  clipsSent: number;
   errors: string[];
 }> {
   const { data: channels, error } = await supabase
@@ -251,11 +234,11 @@ export async function checkAllChannels(): Promise<{
   }
 
   if (!channels || channels.length === 0) {
-    return { channelsChecked: 0, newVideosFound: 0, clipsCreated: 0, errors: [] };
+    return { channelsChecked: 0, newVideosFound: 0, clipsSent: 0, errors: [] };
   }
 
   let totalNewVideos = 0;
-  let totalClips = 0;
+  let totalSent = 0;
   const errors: string[] = [];
 
   for (const channel of channels as MonitoredChannel[]) {
@@ -283,32 +266,17 @@ export async function checkAllChannels(): Promise<{
         if (channel.auto_clip) {
           try {
             const { projectId } = await sendToOpusClip(videoUrl);
-            totalClips++;
+            totalSent++;
             console.log(
-              `[youtube-monitor] Sent to Opus Clip: "${video.title}" → project ${projectId}`
+              `[youtube-monitor] Sent to Opus Clip via Zapier: "${video.title}" -> project ${projectId}`
             );
-
-            // Add to pending projects for auto-scheduler to pick up
-            const { getAppSetting, setAppSetting } = await import(
-              "./settings"
-            );
-            const pending =
-              (await getAppSetting<string[]>(
-                "opus_clip_pending_projects"
-              )) || [];
-            if (!pending.includes(projectId)) {
-              await setAppSetting("opus_clip_pending_projects", [
-                ...pending,
-                projectId,
-              ]);
-            }
           } catch (err) {
             const msg = err instanceof Error ? err.message : String(err);
             errors.push(
               `Failed to send "${video.title}" to Opus Clip: ${msg}`
             );
             console.error(
-              `[youtube-monitor] Opus Clip error for "${video.title}":`,
+              `[youtube-monitor] Zapier webhook error for "${video.title}":`,
               msg
             );
           }
@@ -337,7 +305,7 @@ export async function checkAllChannels(): Promise<{
   return {
     channelsChecked: channels.length,
     newVideosFound: totalNewVideos,
-    clipsCreated: totalClips,
+    clipsSent: totalSent,
     errors,
   };
 }

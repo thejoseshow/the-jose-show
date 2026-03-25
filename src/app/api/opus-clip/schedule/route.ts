@@ -1,54 +1,75 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import {
-  autoScheduleProject,
-  getProjectClips,
-  getSocialAccounts,
-  cancelSchedule,
-  markProjectProcessed,
-} from "@/lib/opus-clip";
-import { getAppSetting, setAppSetting } from "@/lib/settings";
+import { supabase } from "@/lib/supabase";
 
 /**
- * POST /api/opus-clip/schedule
+ * GET /api/opus-clip/schedule
  *
- * Manually trigger auto-scheduling for a specific Opus Clip project.
- * Body: { projectId: string }
+ * Get scheduled content from our system. Shows upcoming posts
+ * with their virality tier and platform info.
  */
-export async function POST(request: NextRequest) {
+export async function GET() {
   const session = await getSession();
   if (!session?.authenticated) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const body = await request.json();
-    const { projectId } = body as { projectId?: string };
+    const now = new Date().toISOString();
 
-    if (!projectId || typeof projectId !== "string") {
-      return NextResponse.json(
-        { error: "Missing or invalid projectId" },
-        { status: 400 }
-      );
+    // Fetch upcoming scheduled content
+    const { data: content, error } = await supabase
+      .from("content")
+      .select("id, title, status, platforms, scheduled_at, clip_id, created_at")
+      .not("scheduled_at", "is", null)
+      .gte("scheduled_at", now)
+      .in("status", ["approved", "publishing", "published", "partially_published"])
+      .order("scheduled_at", { ascending: true })
+      .limit(50);
+
+    if (error) throw new Error(error.message);
+
+    // Fetch virality scores for clips
+    const clipIds = (content || []).map((c) => c.clip_id).filter(Boolean) as string[];
+    const scoreMap = new Map<string, number | null>();
+
+    if (clipIds.length > 0) {
+      const { data: clips } = await supabase
+        .from("clips")
+        .select("id, opus_clip_score")
+        .in("id", clipIds);
+
+      for (const clip of clips || []) {
+        scoreMap.set(clip.id, clip.opus_clip_score);
+      }
     }
 
-    const result = await autoScheduleProject(projectId);
-    await markProjectProcessed(projectId);
+    // Build response
+    const posts = (content || []).map((c) => {
+      const score = c.clip_id ? (scoreMap.get(c.clip_id) ?? null) : null;
+      let viralityTier: "hot" | "medium" | "filler" = "filler";
+      if (score != null) {
+        if (score >= 80) viralityTier = "hot";
+        else if (score >= 50) viralityTier = "medium";
+      }
 
-    // Store the schedule results in app_settings for retrieval
-    const scheduleKey = `opus_schedule_${projectId}`;
-    await setAppSetting(scheduleKey, {
-      ...result,
-      scheduledAt: new Date().toISOString(),
+      return {
+        contentId: c.id,
+        title: c.title,
+        platforms: c.platforms,
+        scheduledAt: c.scheduled_at,
+        status: c.status,
+        viralityRank: score ?? 0,
+        viralityTier,
+      };
     });
 
-    return NextResponse.json({ success: true, data: result });
+    return NextResponse.json({ success: true, data: posts });
   } catch (err) {
     return NextResponse.json(
       {
         success: false,
-        error:
-          err instanceof Error ? err.message : "Failed to schedule project",
+        error: err instanceof Error ? err.message : "Failed to fetch schedule",
       },
       { status: 500 }
     );
@@ -56,72 +77,9 @@ export async function POST(request: NextRequest) {
 }
 
 /**
- * GET /api/opus-clip/schedule?projectId=xxx
+ * DELETE /api/opus-clip/schedule?contentId=xxx
  *
- * Get the schedule status for a project.
- */
-export async function GET(request: NextRequest) {
-  const session = await getSession();
-  if (!session?.authenticated) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
-
-  try {
-    const projectId = request.nextUrl.searchParams.get("projectId");
-
-    if (projectId) {
-      // Get schedule for a specific project
-      const scheduleKey = `opus_schedule_${projectId}`;
-      const schedule = await getAppSetting<Record<string, unknown>>(
-        scheduleKey
-      );
-
-      if (!schedule) {
-        return NextResponse.json({
-          success: true,
-          data: null,
-          message: "No schedule found for this project",
-        });
-      }
-
-      return NextResponse.json({ success: true, data: schedule });
-    }
-
-    // No projectId: return all recent schedules
-    // Collect from processed projects
-    const processedIds =
-      (await getAppSetting<string[]>("opus_clip_processed_projects")) || [];
-    const schedules = [];
-
-    for (const id of processedIds.slice(-10)) {
-      const scheduleKey = `opus_schedule_${id}`;
-      const schedule = await getAppSetting<Record<string, unknown>>(
-        scheduleKey
-      );
-      if (schedule) {
-        schedules.push({ projectId: id, ...schedule });
-      }
-    }
-
-    return NextResponse.json({ success: true, data: schedules });
-  } catch (err) {
-    return NextResponse.json(
-      {
-        success: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "Failed to fetch schedule status",
-      },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * DELETE /api/opus-clip/schedule?scheduleId=xxx
- *
- * Cancel a scheduled post.
+ * Remove a content item from the schedule (set scheduled_at to null).
  */
 export async function DELETE(request: NextRequest) {
   const session = await getSession();
@@ -130,29 +88,34 @@ export async function DELETE(request: NextRequest) {
   }
 
   try {
-    const scheduleId = request.nextUrl.searchParams.get("scheduleId");
-
-    if (!scheduleId) {
+    const contentId = request.nextUrl.searchParams.get("contentId");
+    if (!contentId) {
       return NextResponse.json(
-        { error: "Missing scheduleId parameter" },
+        { error: "Missing contentId parameter" },
         { status: 400 }
       );
     }
 
-    await cancelSchedule(scheduleId);
+    const { error } = await supabase
+      .from("content")
+      .update({
+        scheduled_at: null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("id", contentId)
+      .eq("status", "approved");
+
+    if (error) throw new Error(error.message);
 
     return NextResponse.json({
       success: true,
-      message: `Schedule ${scheduleId} cancelled`,
+      message: `Content ${contentId} unscheduled`,
     });
   } catch (err) {
     return NextResponse.json(
       {
         success: false,
-        error:
-          err instanceof Error
-            ? err.message
-            : "Failed to cancel schedule",
+        error: err instanceof Error ? err.message : "Failed to unschedule",
       },
       { status: 500 }
     );

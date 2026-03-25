@@ -1,312 +1,411 @@
 // ============================================================
-// The Jose Show - Opus Clip API Client
+// The Jose Show - Opus Clip via Zapier Webhooks
 // ============================================================
 //
-// Integrates with the Opus Clip API to fetch projects, clips,
-// and schedule posts across connected social platforms.
-// Uses virality ranking from Opus's internal quality sorting.
+// Integrates with Opus Clip through Zapier webhooks instead of
+// the direct Opus Clip API (which requires enterprise access).
 //
-// Env var: OPUS_CLIP_API_KEY
+// Flow:
+//   1. Send video URL to Zapier webhook -> Zapier triggers Opus Clip
+//   2. Opus Clip processes video, generates clips
+//   3. Zapier sends webhook back to our app with clip data (Path A)
+//      OR Opus Clip exports clips to Google Drive folder (Path B)
+//   4. Our app downloads clips, stores in Supabase Storage
+//   5. Claude generates platform-specific copy
+//   6. Auto-scheduler ranks by position and schedules
+//   7. Our publish pipeline posts to YouTube/FB/IG/TikTok
+//
+// Env vars:
+//   ZAPIER_WEBHOOK_CLIP_VIDEO  — Zapier webhook URL that triggers "Clip Your Video"
+//   ZAPIER_WEBHOOK_SECRET      — Optional shared secret for verifying incoming webhooks
 
-import { getAppSetting } from "./settings";
-import { getOptimalPostingTimes } from "./optimal-times";
+import { supabase } from "./supabase";
+import { getAppSetting, setAppSetting } from "./settings";
+import { uploadClip } from "./storage";
+import { generatePlatformCopy } from "./claude";
+import type { Platform } from "./types";
 
 // --- Types ---
 
-export interface OpusClipProject {
-  id: string;
-  name?: string;
-  createdAt?: string;
-  updatedAt?: string;
-  clipCount?: number;
+export interface ZapierClipRequest {
+  videoUrl?: string;       // YouTube URL
+  videoFileUrl?: string;   // Google Drive / direct file URL
+  sourceVideoId?: string;  // Our internal tracking ID
 }
 
-export interface OpusClipClip {
-  id: string;
+export interface OpusClipResult {
   projectId: string;
+  clips: OpusClip[];
+}
+
+export interface OpusClip {
+  id: string;
   title: string;
   description: string;
-  text: string;
-  hashtags: string[];
-  keywords: string[];
-  genre?: string;
-  subgenre?: string;
+  downloadUrl: string;     // Direct URL to clip file
   durationMs: number;
-  uriForPreview: string;
-  uriForExport: string;
-  timeRanges?: unknown;
-  createdAt: string;
-  updatedAt: string;
-  renderPref?: unknown;
-  // Computed field: position-based virality rank (100 = best)
-  viralityRank: number;
-}
-
-export interface OpusSocialAccount {
-  postAccountId: string;
-  subAccountId?: string;
-  platform: string;
-  extUserId: string;
-  extUserName: string;
-  extUserPictureLink?: string;
-  extUserProfileLink?: string;
-}
-
-export interface OpusPostDetail {
-  title: string;
-  mediaType?: string;
-  custom?: {
-    description?: string;
-    privacy?: string;
-  };
-}
-
-export interface OpusScheduleResult {
-  scheduleId: string;
-}
-
-export interface OpusSocialCopyResult {
-  jobId: string;
-  title?: string;
-  description?: string;
-  hashtags?: string[];
+  position: number;        // 0-indexed position in results
+  viralityRank: number;    // Computed: 100 - (position * 5), min 10
 }
 
 export type ViralityTier = "hot" | "medium" | "filler";
 
-export interface ScheduledPostEntry {
-  clipId: string;
-  clipTitle: string;
-  platform: string;
-  accountName: string;
-  scheduledAt: string;
-  viralityRank: number;
-  viralityTier: ViralityTier;
-  scheduleId?: string;
+export interface PendingProject {
+  id: string;
+  videoUrl: string;
+  sourceVideoId?: string;
+  status: "pending" | "processing" | "completed" | "failed";
+  createdAt: string;
+  completedAt?: string;
+  clipCount?: number;
+  error?: string;
 }
 
 export interface AutoScheduleResult {
   projectId: string;
   totalClips: number;
   totalScheduled: number;
-  posts: ScheduledPostEntry[];
+  contentIds: string[];
   errors: string[];
 }
 
-// --- Base Fetch ---
+// --- Zapier Webhook: Send Video for Clipping ---
 
-const OPUS_API_BASE = "https://api.opus.pro";
+/**
+ * Send a video URL to Opus Clip via Zapier webhook.
+ * This triggers the Zapier zap that calls Opus Clip's "Clip Your Video" action.
+ * Returns immediately — processing is async.
+ */
+export async function sendToOpusClip(
+  videoUrl: string,
+  sourceVideoId?: string
+): Promise<{ projectId: string }> {
+  const webhookUrl = process.env.ZAPIER_WEBHOOK_CLIP_VIDEO;
+  if (!webhookUrl) {
+    throw new Error(
+      "Missing ZAPIER_WEBHOOK_CLIP_VIDEO environment variable. " +
+      "Set this to your Zapier webhook URL that triggers Opus Clip."
+    );
+  }
 
-function getApiKey(): string {
-  const key = process.env.OPUS_CLIP_API_KEY;
-  if (!key) throw new Error("Missing OPUS_CLIP_API_KEY environment variable");
-  return key;
-}
+  // Generate a tracking ID for this project
+  const projectId = crypto.randomUUID();
 
-export async function opusFetch<T = unknown>(
-  path: string,
-  options: RequestInit = {}
-): Promise<T> {
-  const url = `${OPUS_API_BASE}${path}`;
-  const apiKey = getApiKey();
+  const payload: ZapierClipRequest & { projectId: string } = {
+    videoUrl,
+    sourceVideoId,
+    projectId,
+  };
 
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-      ...options.headers,
-    },
+  const res = await fetch(webhookUrl, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
   });
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(
-      `Opus Clip API error ${res.status} on ${path}: ${text.slice(0, 200)}`
+      `Zapier webhook failed (${res.status}): ${text.slice(0, 200)}`
     );
   }
 
-  return res.json();
+  // Store pending project in app_settings
+  const pending = (await getAppSetting<PendingProject[]>("opus_pending_projects")) || [];
+  pending.push({
+    id: projectId,
+    videoUrl,
+    sourceVideoId,
+    status: "pending",
+    createdAt: new Date().toISOString(),
+  });
+  // Keep last 50 pending projects
+  await setAppSetting("opus_pending_projects", pending.slice(-50));
+
+  console.log(`[opus-clip] Sent to Zapier: ${videoUrl} -> project ${projectId}`);
+
+  return { projectId };
 }
 
-// --- Social Accounts ---
+// --- Handle Incoming Webhook (Path A) ---
 
-export async function getSocialAccounts(): Promise<OpusSocialAccount[]> {
-  const res = await opusFetch<{ data: OpusSocialAccount[] }>(
-    "/api/social-accounts?q=mine"
-  );
-  return res.data || [];
-}
+/**
+ * Called when Zapier sends us the "project completed" webhook.
+ * Processes the clips: download, store, create records, generate copy, auto-schedule.
+ */
+export async function handleOpusClipComplete(webhookData: {
+  projectId?: string;
+  clips?: Array<{
+    id?: string;
+    title?: string;
+    description?: string;
+    download_url?: string;
+    downloadUrl?: string;
+    duration_ms?: number;
+    durationMs?: number;
+    position?: number;
+  }>;
+  videoUrl?: string;
+  error?: string;
+}): Promise<AutoScheduleResult> {
+  const projectId = webhookData.projectId || crypto.randomUUID();
+  const errors: string[] = [];
+  const contentIds: string[] = [];
 
-// --- Projects & Clips ---
+  // Update pending project status
+  await updatePendingProject(projectId, "processing");
 
-export async function getProjectClips(
-  projectId: string
-): Promise<OpusClipClip[]> {
-  const res = await opusFetch<{ data: RawClip[] }>(
-    `/api/exportable-clips?projectId=${encodeURIComponent(projectId)}`
-  );
+  if (webhookData.error) {
+    await updatePendingProject(projectId, "failed", webhookData.error);
+    return { projectId, totalClips: 0, totalScheduled: 0, contentIds: [], errors: [webhookData.error] };
+  }
 
-  const rawClips = res.data || [];
+  const rawClips = webhookData.clips || [];
+  if (rawClips.length === 0) {
+    await updatePendingProject(projectId, "failed", "No clips in webhook payload");
+    return { projectId, totalClips: 0, totalScheduled: 0, contentIds: [], errors: ["No clips received from Zapier"] };
+  }
 
-  // Clips are returned sorted by Opus's internal quality ranking.
-  // First clip = best/most viral. We assign a computed viralityRank.
-  return rawClips.map((clip, index) => ({
-    id: clip.id,
-    projectId: clip.projectId,
-    title: clip.title || "",
+  // Normalize clip data
+  const clips: OpusClip[] = rawClips.map((clip, index) => ({
+    id: clip.id || crypto.randomUUID(),
+    title: clip.title || `Clip ${index + 1}`,
     description: clip.description || "",
-    text: clip.text || "",
-    hashtags: clip.hashtags || [],
-    keywords: clip.keywords || [],
-    genre: clip.genre,
-    subgenre: clip.subgenre,
-    durationMs: clip.durationMs || 0,
-    uriForPreview: clip.uriForPreview || "",
-    uriForExport: clip.uriForExport || "",
-    timeRanges: clip.timeRanges,
-    createdAt: clip.createdAt || "",
-    updatedAt: clip.updatedAt || "",
-    renderPref: clip.renderPref,
-    viralityRank: Math.max(10, 100 - index * 5),
+    downloadUrl: clip.download_url || clip.downloadUrl || "",
+    durationMs: clip.duration_ms || clip.durationMs || 0,
+    position: clip.position ?? index,
+    viralityRank: Math.max(10, 100 - (clip.position ?? index) * 5),
   }));
-}
 
-// Raw clip shape from the API (before we add viralityRank)
-interface RawClip {
-  id: string;
-  projectId: string;
-  title?: string;
-  description?: string;
-  text?: string;
-  hashtags?: string[];
-  keywords?: string[];
-  genre?: string;
-  subgenre?: string;
-  durationMs?: number;
-  uriForPreview?: string;
-  uriForExport?: string;
-  timeRanges?: unknown;
-  createdAt?: string;
-  updatedAt?: string;
-  renderPref?: unknown;
-}
+  console.log(`[opus-clip] Processing ${clips.length} clips for project ${projectId}`);
 
-export async function getProjectDetails(
-  projectId: string
-): Promise<OpusClipProject> {
-  const res = await opusFetch<{ data: OpusClipProject }>(
-    `/api/clip-projects/${encodeURIComponent(projectId)}`
-  );
-  return res.data;
-}
+  // Get enabled platforms
+  const enabledPlatforms = await getEnabledPlatforms();
 
-// --- Social Copy Generation ---
+  for (const clip of clips) {
+    try {
+      // Skip clips with no download URL
+      if (!clip.downloadUrl) {
+        errors.push(`Clip "${clip.title}" has no download URL, skipping`);
+        continue;
+      }
 
-export async function generateSocialCopy(
-  projectId: string,
-  clipId: string,
-  postAccountId: string,
-  subAccountId?: string
-): Promise<OpusSocialCopyResult> {
-  // Start the job
-  const startRes = await opusFetch<{ data: { jobId: string } }>(
-    "/api/social-copy-jobs",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        projectId,
-        clipId,
-        postAccountId,
-        ...(subAccountId ? { subAccountId } : {}),
-      }),
-    }
-  );
+      // Download clip
+      const videoRes = await fetch(clip.downloadUrl);
+      if (!videoRes.ok) {
+        errors.push(`Failed to download clip "${clip.title}": HTTP ${videoRes.status}`);
+        continue;
+      }
+      const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+      const durationSeconds = clip.durationMs > 0 ? clip.durationMs / 1000 : 0;
 
-  const jobId = startRes.data.jobId;
+      // Upload to Supabase Storage
+      const storagePath = `opus/${projectId}/${clip.id}.mp4`;
+      const publicUrl = await uploadClip(storagePath, videoBuffer, "video/mp4");
 
-  // Poll until done (max 30 seconds)
-  const maxAttempts = 15;
-  for (let i = 0; i < maxAttempts; i++) {
-    await sleep(2000);
+      // Create clip record
+      const { data: clipRecord, error: clipError } = await supabase
+        .from("clips")
+        .insert({
+          video_id: null, // No parent video record for Opus Clip imports
+          storage_path: storagePath,
+          start_time: 0,
+          end_time: durationSeconds,
+          duration_seconds: durationSeconds,
+          aspect_ratio: "9:16",
+          opus_clip_score: clip.viralityRank,
+          opus_clip_title: clip.title,
+          has_captions: true,
+          has_face_tracking: false,
+        })
+        .select("id")
+        .single();
 
-    const pollRes = await opusFetch<{
-      data: {
-        status: string;
-        title?: string;
-        description?: string;
-        hashtags?: string[];
-      };
-    }>(`/api/social-copy-jobs/${jobId}`);
+      if (clipError || !clipRecord) {
+        errors.push(`Failed to create clip record for "${clip.title}": ${clipError?.message}`);
+        continue;
+      }
 
-    if (pollRes.data.status === "completed" || pollRes.data.status === "done") {
-      return {
-        jobId,
-        title: pollRes.data.title,
-        description: pollRes.data.description,
-        hashtags: pollRes.data.hashtags,
-      };
-    }
+      // Generate platform-specific copy via Claude
+      const isShort = durationSeconds <= 60;
+      const copy = await generatePlatformCopy(
+        clip.description || clip.title,
+        clip.title,
+        enabledPlatforms,
+        false,
+        undefined,
+        isShort
+      );
 
-    if (pollRes.data.status === "failed" || pollRes.data.status === "error") {
-      throw new Error(`Social copy generation failed for job ${jobId}`);
+      // Create content record
+      const { data: contentRecord, error: contentError } = await supabase
+        .from("content")
+        .insert({
+          clip_id: clipRecord.id,
+          type: "video_clip",
+          status: "review",
+          title: clip.title,
+          description: clip.description || null,
+          youtube_title: copy.youtube_title,
+          youtube_description: copy.youtube_description,
+          youtube_tags: copy.youtube_tags,
+          facebook_text: copy.facebook_text,
+          instagram_caption: copy.instagram_caption,
+          tiktok_caption: copy.tiktok_caption,
+          media_url: publicUrl,
+          platforms: enabledPlatforms,
+        })
+        .select("id")
+        .single();
+
+      if (contentError || !contentRecord) {
+        errors.push(`Failed to create content for "${clip.title}": ${contentError?.message}`);
+        continue;
+      }
+
+      contentIds.push(contentRecord.id);
+      console.log(`[opus-clip] Created content ${contentRecord.id} for clip "${clip.title}" (rank: ${clip.viralityRank})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Error processing clip "${clip.title}": ${msg}`);
     }
   }
 
-  throw new Error(`Social copy generation timed out for job ${jobId}`);
+  // Update pending project status
+  await updatePendingProject(projectId, "completed", undefined, contentIds.length);
+
+  // Mark project as processed
+  await markProjectProcessed(projectId);
+
+  return {
+    projectId,
+    totalClips: clips.length,
+    totalScheduled: contentIds.length,
+    contentIds,
+    errors,
+  };
 }
 
-// --- Publishing ---
+// --- Process Clips from Google Drive (Path B) ---
 
-export async function publishNow(
-  projectId: string,
-  clipId: string,
-  postAccountId: string,
-  subAccountId: string | undefined,
-  postDetail: OpusPostDetail
-): Promise<void> {
-  await opusFetch("/api/post-tasks", {
-    method: "POST",
-    body: JSON.stringify({
-      projectId,
-      clipId,
-      postAccountId,
-      ...(subAccountId ? { subAccountId } : {}),
-      postDetail,
-    }),
-  });
-}
+/**
+ * Alternative path: import clips from Google Drive folder.
+ * Called by the process-uploads cron when it finds new files
+ * in the Opus Clip export folder.
+ */
+export async function processClipsFromDrive(driveFiles: Array<{
+  id: string;
+  name: string;
+  mimeType: string;
+  downloadUrl: string;
+  size?: number;
+}>): Promise<AutoScheduleResult> {
+  const projectId = `drive-${Date.now()}`;
+  const errors: string[] = [];
+  const contentIds: string[] = [];
 
-export async function schedulePost(
-  projectId: string,
-  clipId: string,
-  postAccountId: string,
-  subAccountId: string | undefined,
-  publishAt: string, // ISO 8601 UTC
-  postDetail: OpusPostDetail
-): Promise<OpusScheduleResult> {
-  const res = await opusFetch<{ data: { scheduleId: string } }>(
-    "/api/publish-schedules",
-    {
-      method: "POST",
-      body: JSON.stringify({
-        projectId,
-        clipId,
-        postAccountId,
-        ...(subAccountId ? { subAccountId } : {}),
-        publishAt,
-        postDetail,
-      }),
+  console.log(`[opus-clip] Processing ${driveFiles.length} clips from Drive`);
+
+  const enabledPlatforms = await getEnabledPlatforms();
+
+  for (let index = 0; index < driveFiles.length; index++) {
+    const file = driveFiles[index];
+    try {
+      // Skip non-video files
+      if (!file.mimeType.startsWith("video/")) {
+        continue;
+      }
+
+      // Download from Drive
+      const videoRes = await fetch(file.downloadUrl);
+      if (!videoRes.ok) {
+        errors.push(`Failed to download "${file.name}": HTTP ${videoRes.status}`);
+        continue;
+      }
+      const videoBuffer = Buffer.from(await videoRes.arrayBuffer());
+
+      // Upload to Supabase Storage
+      const clipId = crypto.randomUUID();
+      const storagePath = `opus/${projectId}/${clipId}.mp4`;
+      const publicUrl = await uploadClip(storagePath, videoBuffer, file.mimeType);
+
+      // Position-based virality rank (first file = best)
+      const viralityRank = Math.max(10, 100 - index * 5);
+
+      // Create clip record
+      const { data: clipRecord, error: clipError } = await supabase
+        .from("clips")
+        .insert({
+          video_id: null,
+          storage_path: storagePath,
+          start_time: 0,
+          end_time: 0,
+          duration_seconds: 0,
+          aspect_ratio: "9:16",
+          opus_clip_score: viralityRank,
+          opus_clip_title: file.name.replace(/\.[^.]+$/, ""),
+          has_captions: true,
+          has_face_tracking: false,
+        })
+        .select("id")
+        .single();
+
+      if (clipError || !clipRecord) {
+        errors.push(`Failed to create clip for "${file.name}": ${clipError?.message}`);
+        continue;
+      }
+
+      // Generate copy
+      const title = file.name.replace(/\.[^.]+$/, "");
+      const copy = await generatePlatformCopy(
+        title,
+        title,
+        enabledPlatforms,
+        false,
+        undefined,
+        true // assume short-form from Opus Clip
+      );
+
+      // Create content record
+      const { data: contentRecord, error: contentError } = await supabase
+        .from("content")
+        .insert({
+          clip_id: clipRecord.id,
+          type: "video_clip",
+          status: "review",
+          title,
+          youtube_title: copy.youtube_title,
+          youtube_description: copy.youtube_description,
+          youtube_tags: copy.youtube_tags,
+          facebook_text: copy.facebook_text,
+          instagram_caption: copy.instagram_caption,
+          tiktok_caption: copy.tiktok_caption,
+          media_url: publicUrl,
+          platforms: enabledPlatforms,
+        })
+        .select("id")
+        .single();
+
+      if (contentError || !contentRecord) {
+        errors.push(`Failed to create content for "${file.name}": ${contentError?.message}`);
+        continue;
+      }
+
+      contentIds.push(contentRecord.id);
+      console.log(`[opus-clip] Imported "${file.name}" -> content ${contentRecord.id} (rank: ${viralityRank})`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(`Error processing "${file.name}": ${msg}`);
     }
-  );
+  }
 
-  return { scheduleId: res.data.scheduleId };
-}
-
-export async function cancelSchedule(scheduleId: string): Promise<void> {
-  await opusFetch(`/api/publish-schedules/${encodeURIComponent(scheduleId)}`, {
-    method: "DELETE",
-  });
+  return {
+    projectId,
+    totalClips: driveFiles.filter((f) => f.mimeType.startsWith("video/")).length,
+    totalScheduled: contentIds.length,
+    contentIds,
+    errors,
+  };
 }
 
 // --- Virality Tier Classification ---
@@ -315,10 +414,8 @@ export async function getViralityThresholds(): Promise<{
   hot: number;
   medium: number;
 }> {
-  const hot =
-    (await getAppSetting<number>("virality_hot_threshold")) ?? 80;
-  const medium =
-    (await getAppSetting<number>("virality_medium_threshold")) ?? 50;
+  const hot = (await getAppSetting<number>("virality_hot_threshold")) ?? 80;
+  const medium = (await getAppSetting<number>("virality_medium_threshold")) ?? 50;
   return { hot, medium };
 }
 
@@ -332,204 +429,73 @@ export function classifyViralityTier(
   return "filler";
 }
 
-// --- Schedule Time Calculation ---
-
-async function calculateScheduleTime(
-  tier: ViralityTier,
-  index: number,
-  platformCount: number
-): Promise<Date> {
-  const now = new Date();
-  const optimalTimes = await getOptimalPostingTimes();
-  const defaultHours = [11, 14, 18, 19];
-  const hours =
-    optimalTimes.length > 0
-      ? [...new Set(optimalTimes.map((t) => t.hour))].sort((a, b) => a - b)
-      : defaultHours;
-
-  // Offset within the day: spread across optimal time slots
-  const slotIndex = (index * platformCount) % hours.length;
-  const targetHour = hours[slotIndex] ?? 14;
-
-  let daysOut: number;
-
-  switch (tier) {
-    case "hot":
-      // Schedule within hours: today or tomorrow at the next optimal slot
-      daysOut = 0;
-      break;
-    case "medium":
-      // Schedule 1-3 days out, spread evenly
-      daysOut = 1 + (index % 3);
-      break;
-    case "filler":
-      // Spread across the rest of the month: 4+ days out
-      daysOut = 4 + index * 2;
-      break;
-  }
-
-  const scheduled = new Date(now);
-  scheduled.setDate(scheduled.getDate() + daysOut);
-  scheduled.setUTCHours(targetHour, 0, 0, 0);
-
-  // If the computed time is in the past, bump to next day
-  if (scheduled <= now) {
-    scheduled.setDate(scheduled.getDate() + 1);
-  }
-
-  return scheduled;
-}
-
-// --- Main Auto-Schedule Function ---
-
-export async function autoScheduleProject(
-  projectId: string
-): Promise<AutoScheduleResult> {
-  const errors: string[] = [];
-  const posts: ScheduledPostEntry[] = [];
-
-  // 1. Fetch all clips for the project (sorted by Opus quality)
-  const clips = await getProjectClips(projectId);
-  if (clips.length === 0) {
-    return {
-      projectId,
-      totalClips: 0,
-      totalScheduled: 0,
-      posts: [],
-      errors: ["No clips found for this project"],
-    };
-  }
-
-  // 2. Fetch connected social accounts
-  const accounts = await getSocialAccounts();
-
-  // 3. Filter accounts based on platform toggles from settings
-  const enabledPlatforms = await getEnabledPlatforms();
-  const filteredAccounts = accounts.filter((a) =>
-    enabledPlatforms.includes(a.platform.toLowerCase())
-  );
-
-  if (filteredAccounts.length === 0) {
-    return {
-      projectId,
-      totalClips: clips.length,
-      totalScheduled: 0,
-      posts: [],
-      errors: [
-        "No connected social accounts match enabled platforms. Check Opus Clip connections and platform settings.",
-      ],
-    };
-  }
-
-  // 4. Get virality thresholds
-  const { hot: hotThreshold, medium: mediumThreshold } =
-    await getViralityThresholds();
-
-  // 5. For each clip, calculate schedule time and post to each platform
-  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
-    const clip = clips[clipIndex];
-    const tier = classifyViralityTier(
-      clip.viralityRank,
-      hotThreshold,
-      mediumThreshold
-    );
-
-    const scheduleTime = await calculateScheduleTime(
-      tier,
-      clipIndex,
-      filteredAccounts.length
-    );
-
-    for (const account of filteredAccounts) {
-      try {
-        // Stagger posts on different platforms by 30 minutes
-        const platformOffset = filteredAccounts.indexOf(account) * 30;
-        const adjustedTime = new Date(
-          scheduleTime.getTime() + platformOffset * 60 * 1000
-        );
-
-        const postDetail: OpusPostDetail = {
-          title: clip.title || `Clip ${clipIndex + 1}`,
-          custom: {
-            description: clip.description || undefined,
-          },
-        };
-
-        const result = await schedulePost(
-          projectId,
-          clip.id,
-          account.postAccountId,
-          account.subAccountId,
-          adjustedTime.toISOString(),
-          postDetail
-        );
-
-        posts.push({
-          clipId: clip.id,
-          clipTitle: clip.title || `Clip ${clipIndex + 1}`,
-          platform: account.platform,
-          accountName: account.extUserName,
-          scheduledAt: adjustedTime.toISOString(),
-          viralityRank: clip.viralityRank,
-          viralityTier: tier,
-          scheduleId: result.scheduleId,
-        });
-      } catch (err) {
-        const msg =
-          err instanceof Error ? err.message : String(err);
-        errors.push(
-          `Failed to schedule clip "${clip.title}" on ${account.platform} (${account.extUserName}): ${msg}`
-        );
-      }
-    }
-  }
-
-  return {
-    projectId,
-    totalClips: clips.length,
-    totalScheduled: posts.length,
-    posts,
-    errors,
-  };
-}
-
 // --- Platform Enable/Disable ---
 
-async function getEnabledPlatforms(): Promise<string[]> {
+export async function getEnabledPlatforms(): Promise<Platform[]> {
   const setting = await getAppSetting<Record<string, boolean>>(
     "opus_clip_platforms"
   );
 
-  if (!setting) {
-    // Default: all platforms enabled
-    return [
-      "youtube",
-      "tiktok_business",
-      "facebook_page",
-      "instagram_business",
-      "linkedin",
-      "twitter",
-    ];
+  // Default platforms for our publish pipeline
+  const defaultPlatforms: Platform[] = ["youtube", "facebook", "instagram", "tiktok"];
+
+  if (!setting) return defaultPlatforms;
+
+  // Map Opus Clip platform keys to our platform names
+  const platformMap: Record<string, Platform> = {
+    youtube: "youtube",
+    tiktok_business: "tiktok",
+    facebook_page: "facebook",
+    instagram_business: "instagram",
+  };
+
+  const enabled: Platform[] = [];
+  for (const [key, isEnabled] of Object.entries(setting)) {
+    if (isEnabled && platformMap[key]) {
+      enabled.push(platformMap[key]);
+    }
   }
 
-  return Object.entries(setting)
-    .filter(([, enabled]) => enabled)
-    .map(([platform]) => platform);
+  return enabled.length > 0 ? enabled : defaultPlatforms;
 }
 
-// --- Sync Projects ---
+// --- Pending Projects Management ---
 
-/**
- * Fetch recent project IDs that have been processed.
- * Returns project IDs stored in app_settings.
- */
+export async function getPendingProjects(): Promise<PendingProject[]> {
+  return (await getAppSetting<PendingProject[]>("opus_pending_projects")) || [];
+}
+
+async function updatePendingProject(
+  projectId: string,
+  status: PendingProject["status"],
+  error?: string,
+  clipCount?: number
+): Promise<void> {
+  const pending = await getPendingProjects();
+  const updated = pending.map((p) =>
+    p.id === projectId
+      ? {
+          ...p,
+          status,
+          ...(error ? { error } : {}),
+          ...(clipCount !== undefined ? { clipCount } : {}),
+          ...(status === "completed" || status === "failed"
+            ? { completedAt: new Date().toISOString() }
+            : {}),
+        }
+      : p
+  );
+  await setAppSetting("opus_pending_projects", updated);
+}
+
+// --- Processed Projects ---
+
 export async function getProcessedProjectIds(): Promise<string[]> {
   const ids = await getAppSetting<string[]>("opus_clip_processed_projects");
   return ids || [];
 }
 
 export async function markProjectProcessed(projectId: string): Promise<void> {
-  const { setAppSetting } = await import("./settings");
   const existing = await getProcessedProjectIds();
   if (!existing.includes(projectId)) {
     // Keep last 100 project IDs
@@ -538,8 +504,17 @@ export async function markProjectProcessed(projectId: string): Promise<void> {
   }
 }
 
-// --- Helpers ---
+// --- Webhook Verification ---
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Verify an incoming webhook from Zapier using a shared secret.
+ * The secret can be passed as a query parameter or header.
+ */
+export function verifyWebhookSecret(
+  secret: string | null | undefined
+): boolean {
+  const expected = process.env.ZAPIER_WEBHOOK_SECRET;
+  // If no secret configured, allow all webhooks (simpler setup)
+  if (!expected) return true;
+  return secret === expected;
 }

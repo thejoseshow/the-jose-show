@@ -1,72 +1,42 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { getProcessedProjectIds, getProjectClips, getProjectDetails } from "@/lib/opus-clip";
-import { getAppSetting } from "@/lib/settings";
+import {
+  getPendingProjects,
+  getProcessedProjectIds,
+  sendToOpusClip,
+} from "@/lib/opus-clip";
 
 /**
  * GET /api/opus-clip/projects
  *
- * Lists recent Opus Clip projects. Returns project info with clip counts.
- * Projects can come from the pending list or already-processed list.
+ * Lists Opus Clip projects tracked by our system.
+ * Shows both pending (sent to Opus Clip, waiting for clips) and
+ * completed (clips imported and processed).
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   const session = await getSession();
   if (!session?.authenticated) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    // Collect all known project IDs
-    const pendingProjects =
-      (await getAppSetting<string[]>("opus_clip_pending_projects")) || [];
-    const processedProjects = await getProcessedProjectIds();
+    const pending = await getPendingProjects();
+    const processedIds = await getProcessedProjectIds();
 
-    const allProjectIds = [
-      ...new Set([...pendingProjects, ...processedProjects]),
-    ];
-
-    if (allProjectIds.length === 0) {
-      return NextResponse.json({
-        success: true,
-        data: [],
-        message: "No projects found. Add a project ID to get started.",
-      });
-    }
-
-    // Fetch details for each project
-    const projects = [];
-    for (const projectId of allProjectIds.slice(-20)) {
-      // Last 20 projects
-      try {
-        const clips = await getProjectClips(projectId);
-        let name = `Project ${projectId.slice(0, 8)}`;
-
-        try {
-          const details = await getProjectDetails(projectId);
-          if (details.name) name = details.name;
-        } catch {
-          // Project details endpoint may not always work
-        }
-
-        projects.push({
-          id: projectId,
-          name,
-          clipCount: clips.length,
-          createdAt: clips[0]?.createdAt || new Date().toISOString(),
-          autoScheduled: processedProjects.includes(projectId),
-        });
-      } catch (err) {
-        projects.push({
-          id: projectId,
-          name: `Project ${projectId.slice(0, 8)}`,
-          clipCount: 0,
-          createdAt: new Date().toISOString(),
-          autoScheduled: processedProjects.includes(projectId),
-          error:
-            err instanceof Error ? err.message : "Failed to fetch project",
-        });
-      }
-    }
+    // Build combined project list
+    const projects = pending.map((p) => ({
+      id: p.id,
+      name: p.videoUrl
+        ? `Video: ${p.videoUrl.slice(0, 60)}${p.videoUrl.length > 60 ? "..." : ""}`
+        : `Project ${p.id.slice(0, 8)}`,
+      videoUrl: p.videoUrl,
+      clipCount: p.clipCount || 0,
+      status: p.status,
+      createdAt: p.createdAt,
+      completedAt: p.completedAt,
+      autoScheduled: processedIds.includes(p.id),
+      error: p.error,
+    }));
 
     // Sort by createdAt descending
     projects.sort(
@@ -89,8 +59,8 @@ export async function GET(request: NextRequest) {
 /**
  * POST /api/opus-clip/projects
  *
- * Add a project ID to the pending list for auto-scheduling.
- * Body: { projectId: string }
+ * Send a video to Opus Clip for clipping via Zapier webhook.
+ * Body: { videoUrl: string }
  */
 export async function POST(request: NextRequest) {
   const session = await getSession();
@@ -100,33 +70,27 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { projectId } = body as { projectId?: string };
+    const { videoUrl } = body as { videoUrl?: string };
 
-    if (!projectId || typeof projectId !== "string") {
+    if (!videoUrl || typeof videoUrl !== "string") {
       return NextResponse.json(
-        { error: "Missing or invalid projectId" },
+        { error: "Missing or invalid videoUrl" },
         { status: 400 }
       );
     }
 
-    const { setAppSetting } = await import("@/lib/settings");
-    const pending =
-      (await getAppSetting<string[]>("opus_clip_pending_projects")) || [];
-
-    if (!pending.includes(projectId)) {
-      pending.push(projectId);
-      await setAppSetting("opus_clip_pending_projects", pending);
-    }
+    const { projectId } = await sendToOpusClip(videoUrl);
 
     return NextResponse.json({
       success: true,
-      message: `Project ${projectId} added to pending list`,
+      data: { projectId },
+      message: `Video sent to Opus Clip for clipping (project ${projectId})`,
     });
   } catch (err) {
     return NextResponse.json(
       {
         success: false,
-        error: err instanceof Error ? err.message : "Failed to add project",
+        error: err instanceof Error ? err.message : "Failed to send to Opus Clip",
       },
       { status: 500 }
     );

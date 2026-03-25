@@ -984,16 +984,16 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
-          {/* Opus Clip Integration */}
+          {/* Opus Clip via Zapier */}
           <Card>
             <CardContent className="pt-5 space-y-5">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Scissors className="w-4 h-4 text-purple-400" />
                   <div>
-                    <p className="text-sm font-medium">Opus Clip</p>
+                    <p className="text-sm font-medium">Opus Clip via Zapier</p>
                     <p className="text-xs text-muted-foreground">
-                      Auto-schedule new projects via Opus Clip API
+                      Auto-clip videos and schedule across platforms
                     </p>
                   </div>
                 </div>
@@ -1009,15 +1009,13 @@ export default function SettingsPage() {
                   <Separator />
                   <div className="space-y-3">
                     <p className="text-xs text-muted-foreground">
-                      Enable platforms for auto-scheduling:
+                      Publish to these platforms:
                     </p>
                     {([
                       ["youtube", "YouTube"],
                       ["tiktok_business", "TikTok"],
                       ["facebook_page", "Facebook"],
                       ["instagram_business", "Instagram"],
-                      ["linkedin", "LinkedIn"],
-                      ["twitter", "Twitter"],
                     ] as const).map(([key, label]) => (
                       <div key={key} className="flex items-center justify-between">
                         <Label className="text-sm text-muted-foreground">{label}</Label>
@@ -1030,9 +1028,14 @@ export default function SettingsPage() {
                   </div>
 
                   <Separator />
-                  <p className="text-xs text-muted-foreground">
-                    API key is configured via the <code className="text-xs bg-muted px-1 py-0.5 rounded">OPUS_CLIP_API_KEY</code> environment variable.
-                  </p>
+                  <div className="space-y-2">
+                    <p className="text-xs font-medium text-muted-foreground">Zapier Setup:</p>
+                    <ol className="text-xs text-muted-foreground space-y-1 list-decimal list-inside">
+                      <li>Set <code className="bg-muted px-1 py-0.5 rounded">ZAPIER_WEBHOOK_CLIP_VIDEO</code> to your Zapier webhook URL</li>
+                      <li>Optionally set <code className="bg-muted px-1 py-0.5 rounded">ZAPIER_WEBHOOK_SECRET</code> for webhook verification</li>
+                      <li>Point Zapier&apos;s &quot;Project Completed&quot; action to: <code className="bg-muted px-1 py-0.5 rounded">/api/webhooks/opus-clip</code></li>
+                    </ol>
+                  </div>
                 </>
               )}
             </CardContent>
@@ -1098,7 +1101,7 @@ export default function SettingsPage() {
               <div>
                 <p className="text-sm font-medium">Monitored Channels</p>
                 <p className="text-xs text-muted-foreground">
-                  New videos from these channels are automatically sent to Opus Clip for clipping and scheduling
+                  New videos from these channels are automatically sent to Opus Clip via Zapier for clipping
                 </p>
               </div>
             </div>
@@ -1233,7 +1236,7 @@ export default function SettingsPage() {
                 <div>
                   <p className="text-sm font-medium">Monitor Google Drive Folder</p>
                   <p className="text-xs text-muted-foreground">
-                    Videos dropped in this Drive folder are sent to Opus Clip for clipping
+                    Import Opus Clip exports from this Drive folder
                   </p>
                 </div>
               </div>
@@ -1257,7 +1260,7 @@ export default function SettingsPage() {
                   />
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  The process-uploads cron will detect new files in this folder and create Opus Clip projects automatically.
+                  When Opus Clip exports clips to this Drive folder, the process-uploads cron will automatically import them, generate copy, and schedule posts.
                 </p>
               </>
             )}
