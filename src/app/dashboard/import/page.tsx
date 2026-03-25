@@ -1,186 +1,337 @@
 "use client";
 
-import { useEffect, useState, useCallback, useRef } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Progress } from "@/components/ui/progress";
+import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { Separator } from "@/components/ui/separator";
+import { toast } from "sonner";
 import {
-  CloudUpload,
-  FolderSync,
-  Camera,
-  Loader2,
-  Play,
-  RotateCcw,
-  Trash2,
-  Sparkles,
-  Eye,
+  CalendarDays,
   ChevronDown,
   ChevronUp,
-  HardDrive,
-  FileVideo,
+  Clock,
+  Loader2,
+  Play,
+  Trash2,
+  Zap,
+  Users,
   Plus,
+  ExternalLink,
+  BarChart3,
 } from "lucide-react";
-import { LONG_FORM_THRESHOLD_SECONDS } from "@/lib/constants";
-import type { Video } from "@/lib/types";
 
-const STATUS_STYLES: Record<string, string> = {
-  new: "bg-gray-600 text-white border-transparent",
-  downloading: "bg-blue-600 text-white border-transparent animate-pulse",
-  downloaded: "bg-blue-500 text-white border-transparent",
-  transcribing: "bg-yellow-600 text-white border-transparent animate-pulse",
-  transcribed: "bg-yellow-500 text-white border-transparent",
-  clipping: "bg-purple-600 text-white border-transparent animate-pulse",
-  clipped: "bg-green-500 text-white border-transparent",
-  failed: "bg-red-500 text-white border-transparent",
+// --- Types ---
+
+interface OpusProject {
+  id: string;
+  name: string;
+  clipCount: number;
+  createdAt: string;
+  autoScheduled: boolean;
+  error?: string;
+}
+
+interface OpusClip {
+  id: string;
+  title: string;
+  description: string;
+  durationMs: number;
+  viralityRank: number;
+  uriForPreview: string;
+}
+
+interface ScheduledPostEntry {
+  clipId: string;
+  clipTitle: string;
+  platform: string;
+  accountName: string;
+  scheduledAt: string;
+  viralityRank: number;
+  viralityTier: "hot" | "medium" | "filler";
+  scheduleId?: string;
+}
+
+interface ScheduleData {
+  projectId: string;
+  totalClips: number;
+  totalScheduled: number;
+  posts: ScheduledPostEntry[];
+  errors: string[];
+  scheduledAt: string;
+}
+
+interface SocialAccount {
+  postAccountId: string;
+  subAccountId?: string;
+  platform: string;
+  extUserId: string;
+  extUserName: string;
+  extUserPictureLink?: string;
+  extUserProfileLink?: string;
+}
+
+// --- Constants ---
+
+const PLATFORM_COLORS: Record<string, string> = {
+  YOUTUBE: "bg-red-600 text-white",
+  TIKTOK_BUSINESS: "bg-black text-white border border-white/20",
+  FACEBOOK_PAGE: "bg-blue-600 text-white",
+  INSTAGRAM_BUSINESS: "bg-gradient-to-r from-purple-600 to-pink-600 text-white",
+  LINKEDIN: "bg-blue-700 text-white",
+  TWITTER: "bg-sky-500 text-white",
+  youtube: "bg-red-600 text-white",
+  tiktok_business: "bg-black text-white border border-white/20",
+  facebook_page: "bg-blue-600 text-white",
+  instagram_business: "bg-gradient-to-r from-purple-600 to-pink-600 text-white",
+  linkedin: "bg-blue-700 text-white",
+  twitter: "bg-sky-500 text-white",
 };
 
-const STATUS_ORDER_VIDEO = [
-  "new",
-  "downloading",
-  "downloaded",
-  "transcribing",
-  "transcribed",
-  "clipping",
-  "clipped",
-];
+const TIER_STYLES: Record<string, { label: string; className: string }> = {
+  hot: { label: "HOT", className: "bg-red-600 text-white" },
+  medium: { label: "MEDIUM", className: "bg-yellow-600 text-white" },
+  filler: { label: "FILLER", className: "bg-gray-600 text-white" },
+};
 
-const STATUS_ORDER_PHOTO = [
-  "new",
-  "downloading",
-  "downloaded",
-  "clipping",
-  "clipped",
-];
+function formatPlatformName(platform: string): string {
+  const map: Record<string, string> = {
+    YOUTUBE: "YouTube",
+    TIKTOK_BUSINESS: "TikTok",
+    FACEBOOK_PAGE: "Facebook",
+    INSTAGRAM_BUSINESS: "Instagram",
+    LINKEDIN: "LinkedIn",
+    TWITTER: "Twitter",
+    youtube: "YouTube",
+    tiktok_business: "TikTok",
+    facebook_page: "Facebook",
+    instagram_business: "Instagram",
+    linkedin: "LinkedIn",
+    twitter: "Twitter",
+  };
+  return map[platform] || platform;
+}
 
-export default function ImportPage() {
-  const [videos, setVideos] = useState<Video[]>([]);
+function formatDuration(ms: number): string {
+  const s = Math.round(ms / 1000);
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return m > 0 ? `${m}:${String(rem).padStart(2, "0")}` : `${s}s`;
+}
+
+function formatScheduleTime(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function getTimeUntil(iso: string): string {
+  const diff = new Date(iso).getTime() - Date.now();
+  if (diff < 0) return "Past";
+  const hours = Math.floor(diff / (1000 * 60 * 60));
+  const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (hours > 48) return `${Math.floor(hours / 24)}d`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+// --- Component ---
+
+export default function SchedulePage() {
+  const [projects, setProjects] = useState<OpusProject[]>([]);
+  const [accounts, setAccounts] = useState<SocialAccount[]>([]);
+  const [schedules, setSchedules] = useState<ScheduleData[]>([]);
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false);
-  const [processResult, setProcessResult] = useState<string | null>(null);
-  const [retrying, setRetrying] = useState<string | null>(null);
-  const [reprocessing, setReprocessing] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [sourceVideosOpen, setSourceVideosOpen] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [scheduling, setScheduling] = useState<string | null>(null);
+  const [expandedProject, setExpandedProject] = useState<string | null>(null);
+  const [projectClips, setProjectClips] = useState<Record<string, OpusClip[]>>(
+    {}
+  );
+  const [loadingClips, setLoadingClips] = useState<string | null>(null);
+  const [accountsOpen, setAccountsOpen] = useState(false);
+  const [newProjectId, setNewProjectId] = useState("");
+  const [addingProject, setAddingProject] = useState(false);
+  const [cancelling, setCancelling] = useState<string | null>(null);
 
-  const loadVideos = useCallback(async () => {
+  // --- Data Fetching ---
+
+  const fetchProjects = useCallback(async () => {
     try {
-      const res = await fetch("/api/pipeline/status");
+      const res = await fetch("/api/opus-clip/projects");
       const data = await res.json();
-      if (data.success) setVideos(data.data || []);
-    } catch (err) {
-      console.error("Failed to load videos:", err);
+      if (data.success) setProjects(data.data || []);
+    } catch {
+      // Non-critical
+    }
+  }, []);
+
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/opus-clip/accounts");
+      const data = await res.json();
+      if (data.success) setAccounts(data.data || []);
+    } catch {
+      // Non-critical
+    }
+  }, []);
+
+  const fetchSchedules = useCallback(async () => {
+    try {
+      const res = await fetch("/api/opus-clip/schedule");
+      const data = await res.json();
+      if (data.success) setSchedules(data.data || []);
+    } catch {
+      // Non-critical
     }
   }, []);
 
   useEffect(() => {
-    loadVideos().then(() => setLoading(false));
-    const interval = setInterval(loadVideos, 15000);
-    return () => clearInterval(interval);
-  }, [loadVideos]);
+    Promise.all([fetchProjects(), fetchAccounts(), fetchSchedules()]).then(() =>
+      setLoading(false)
+    );
+  }, [fetchProjects, fetchAccounts, fetchSchedules]);
 
-  async function handleProcessNow() {
-    setProcessing(true);
-    setProcessResult(null);
-    try {
-      const res = await fetch("/api/pipeline/process", { method: "POST" });
-      const data = await res.json();
-      if (data.success) {
-        const parts: string[] = [];
-        if (data.new_files_detected > 0) parts.push(`${data.new_files_detected} new file(s) found`);
-        if (data.processed > 0) parts.push(`${data.processed} video(s) processed`);
-        if (data.errors?.length) parts.push(`${data.errors.length} error(s)`);
-        setProcessResult(parts.length > 0 ? parts.join(", ") : "No new files to process");
-      } else {
-        setProcessResult(data.error || "Processing failed");
-      }
-      await loadVideos();
-    } catch (err) {
-      setProcessResult(`Failed: ${err instanceof Error ? err.message : "Network error"}`);
-    }
-    setProcessing(false);
-  }
+  // --- Actions ---
 
-  async function handleReprocess(videoId: string) {
-    setReprocessing(videoId);
+  async function handleAutoSchedule(projectId: string) {
+    setScheduling(projectId);
     try {
-      const res = await fetch("/api/pipeline/reprocess", {
+      const res = await fetch("/api/opus-clip/schedule", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ video_id: videoId }),
+        body: JSON.stringify({ projectId }),
       });
       const data = await res.json();
       if (data.success) {
-        setProcessResult("Reprocessing started");
+        toast.success(
+          `Scheduled ${data.data.totalScheduled} posts across ${data.data.totalClips} clips`
+        );
+        await Promise.all([fetchProjects(), fetchSchedules()]);
       } else {
-        setProcessResult(data.error || "Reprocess failed");
+        toast.error(data.error || "Auto-schedule failed");
       }
-      await loadVideos();
     } catch {
-      setProcessResult("Failed to reprocess video");
+      toast.error("Failed to auto-schedule project");
     }
-    setReprocessing(null);
+    setScheduling(null);
   }
 
-  async function handleRetry(videoId: string) {
-    setRetrying(videoId);
+  async function handleViewClips(projectId: string) {
+    if (expandedProject === projectId) {
+      setExpandedProject(null);
+      return;
+    }
+
+    setExpandedProject(projectId);
+
+    if (projectClips[projectId]) return;
+
+    setLoadingClips(projectId);
     try {
-      const res = await fetch("/api/pipeline/retry", {
+      // Fetch clips via the projects endpoint (clips are embedded in getProjectClips)
+      const res = await fetch(
+        `/api/opus-clip/schedule?projectId=${projectId}`
+      );
+      const data = await res.json();
+      if (data.success && data.data?.posts) {
+        // Use schedule data to show clips
+      }
+    } catch {
+      // Non-critical
+    }
+    setLoadingClips(null);
+  }
+
+  async function handleAddProject() {
+    if (!newProjectId.trim()) return;
+
+    setAddingProject(true);
+    try {
+      const res = await fetch("/api/opus-clip/projects", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ video_id: videoId }),
+        body: JSON.stringify({ projectId: newProjectId.trim() }),
       });
       const data = await res.json();
       if (data.success) {
-        setProcessResult(`Reset to "${data.reset_to}" — ready for reprocessing`);
+        toast.success("Project added");
+        setNewProjectId("");
+        await fetchProjects();
       } else {
-        setProcessResult(data.error || "Retry failed");
+        toast.error(data.error || "Failed to add project");
       }
-      await loadVideos();
     } catch {
-      setProcessResult("Failed to retry video");
+      toast.error("Failed to add project");
     }
-    setRetrying(null);
+    setAddingProject(false);
   }
 
-  function handleDragOver(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragging(true);
-  }
-
-  function handleDragLeave(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-  }
-
-  function handleDrop(e: React.DragEvent) {
-    e.preventDefault();
-    setIsDragging(false);
-    // Future: handle file upload
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      setProcessResult(`${files.length} file(s) selected. Direct upload coming soon. Use Google Drive for now.`);
+  async function handleCancelSchedule(scheduleId: string) {
+    setCancelling(scheduleId);
+    try {
+      const res = await fetch(
+        `/api/opus-clip/schedule?scheduleId=${scheduleId}`,
+        { method: "DELETE" }
+      );
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Post cancelled");
+        await fetchSchedules();
+      } else {
+        toast.error(data.error || "Failed to cancel");
+      }
+    } catch {
+      toast.error("Failed to cancel post");
     }
+    setCancelling(null);
   }
 
-  const activeCount = videos.filter(
-    (v) => !["clipped", "failed"].includes(v.status)
-  ).length;
-  const failedCount = videos.filter((v) => v.status === "failed").length;
+  // --- Computed Stats ---
+
+  const allPosts = schedules.flatMap((s) => s.posts || []);
+  const now = new Date();
+  const weekFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+  const monthFromNow = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
+
+  const postsThisWeek = allPosts.filter((p) => {
+    const d = new Date(p.scheduledAt);
+    return d >= now && d <= weekFromNow;
+  }).length;
+
+  const postsThisMonth = allPosts.filter((p) => {
+    const d = new Date(p.scheduledAt);
+    return d >= now && d <= monthFromNow;
+  }).length;
+
+  const futurePosts = allPosts
+    .filter((p) => new Date(p.scheduledAt) > now)
+    .sort(
+      (a, b) =>
+        new Date(a.scheduledAt).getTime() - new Date(b.scheduledAt).getTime()
+    );
+
+  const nextPost = futurePosts[0];
+
+  // --- Loading State ---
 
   if (loading) {
     return (
       <div className="space-y-6">
         <Skeleton className="h-8 w-48" />
-        <Skeleton className="h-48 rounded-xl" />
-        <div className="space-y-3">
+        <div className="grid grid-cols-3 gap-4">
           {[...Array(3)].map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-xl" />
           ))}
         </div>
+        <Skeleton className="h-64 rounded-xl" />
       </div>
     );
   }
@@ -194,332 +345,335 @@ export default function ImportPage() {
         animate={{ opacity: 1, y: 0 }}
       >
         <div>
-          <h1 className="text-2xl font-bold">Import</h1>
+          <h1 className="text-2xl font-bold">Schedule</h1>
           <p className="text-sm text-muted-foreground">
-            Bring in clips from Google Drive or upload directly
+            Auto-schedule Opus Clip projects across all platforms
           </p>
-        </div>
-        <div className="flex items-center gap-3">
-          {processResult && (
-            <motion.span
-              className="text-sm text-muted-foreground max-w-xs truncate"
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-            >
-              {processResult}
-            </motion.span>
-          )}
-          {activeCount > 0 && (
-            <Badge variant="secondary" className="text-xs">
-              {activeCount} processing
-            </Badge>
-          )}
-          {failedCount > 0 && (
-            <Badge variant="destructive" className="text-xs">
-              {failedCount} failed
-            </Badge>
-          )}
         </div>
       </motion.div>
 
-      {/* Import Zone */}
+      {/* Quick Stats */}
+      <motion.div
+        className="grid grid-cols-1 sm:grid-cols-3 gap-4"
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.05 }}
+      >
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-3">
+              <CalendarDays className="w-5 h-5 text-blue-400" />
+              <div>
+                <p className="text-2xl font-bold">{postsThisWeek}</p>
+                <p className="text-xs text-muted-foreground">This week</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-3">
+              <BarChart3 className="w-5 h-5 text-green-400" />
+              <div>
+                <p className="text-2xl font-bold">{postsThisMonth}</p>
+                <p className="text-xs text-muted-foreground">This month</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-3">
+              <Clock className="w-5 h-5 text-orange-400" />
+              <div>
+                {nextPost ? (
+                  <>
+                    <p className="text-2xl font-bold">
+                      {getTimeUntil(nextPost.scheduledAt)}
+                    </p>
+                    <p className="text-xs text-muted-foreground truncate max-w-[140px]">
+                      Next: {nextPost.clipTitle}
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-2xl font-bold">--</p>
+                    <p className="text-xs text-muted-foreground">
+                      No upcoming posts
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      </motion.div>
+
+      {/* Add Project */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ delay: 0.1 }}
       >
-        <div
-          onDragOver={handleDragOver}
-          onDragLeave={handleDragLeave}
-          onDrop={handleDrop}
-          onClick={() => fileInputRef.current?.click()}
-          className={`relative rounded-2xl border-2 border-dashed p-12 text-center cursor-pointer transition-all duration-300 ${
-            isDragging
-              ? "border-red-500 bg-red-500/10 scale-[1.01]"
-              : "border-border hover:border-muted-foreground/40 hover:bg-accent/30"
-          }`}
-        >
-          <input
-            ref={fileInputRef}
-            type="file"
-            accept="video/mp4,video/quicktime,video/webm"
-            multiple
-            className="hidden"
-            onChange={() => {
-              setProcessResult("Direct upload coming soon. Use Google Drive for now.");
-            }}
-          />
-
-          <motion.div
-            animate={isDragging ? { scale: 1.1, y: -4 } : { scale: 1, y: 0 }}
-            transition={{ type: "spring", stiffness: 300 }}
-          >
-            <CloudUpload
-              className={`w-12 h-12 mx-auto mb-4 transition-colors ${
-                isDragging ? "text-red-400" : "text-muted-foreground/50"
-              }`}
-            />
-          </motion.div>
-
-          <p className="text-lg font-medium mb-1">
-            {isDragging ? "Drop to import" : "Drop clips here or click to upload"}
-          </p>
-          <p className="text-sm text-muted-foreground">
-            Supports MP4, MOV, WebM
-          </p>
-
-          {/* Animated border pulse when dragging */}
-          {isDragging && (
-            <motion.div
-              className="absolute inset-0 rounded-2xl border-2 border-red-500/50"
-              animate={{ opacity: [0.5, 1, 0.5] }}
-              transition={{ duration: 1.5, repeat: Infinity }}
-            />
-          )}
-        </div>
-
-        {/* Drive scan button */}
-        <div className="flex items-center justify-center gap-4 mt-4">
-          <div className="h-px flex-1 bg-border" />
-          <span className="text-xs text-muted-foreground">or</span>
-          <div className="h-px flex-1 bg-border" />
-        </div>
-
-        <div className="flex items-center justify-center gap-3 mt-4">
-          <Button
-            onClick={handleProcessNow}
-            disabled={processing}
-            variant="outline"
-            className="gap-2"
-          >
-            {processing ? (
-              <>
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Scanning...
-              </>
-            ) : (
-              <>
-                <FolderSync className="h-4 w-4" />
-                Scan Google Drive
-              </>
-            )}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            <HardDrive className="w-3 h-3 inline mr-1" />
-            Auto-scans every 15 min
-          </span>
-        </div>
+        <Card>
+          <CardContent className="pt-5">
+            <div className="flex items-center gap-3">
+              <Input
+                placeholder="Paste Opus Clip project ID..."
+                value={newProjectId}
+                onChange={(e) => setNewProjectId(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleAddProject()}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleAddProject}
+                disabled={addingProject || !newProjectId.trim()}
+                className="gap-2"
+              >
+                {addingProject ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Plus className="h-4 w-4" />
+                )}
+                Add Project
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </motion.div>
 
-      {/* Import Queue */}
+      {/* Projects List */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.2 }}
+        transition={{ delay: 0.15 }}
       >
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="text-lg font-semibold">Import Queue</h2>
-          <span className="text-xs text-muted-foreground">{videos.length} total</span>
-        </div>
+        <h2 className="text-lg font-semibold mb-3">Your Opus Clip Projects</h2>
 
-        {videos.length === 0 ? (
+        {projects.length === 0 ? (
           <Card>
             <CardContent className="py-12 text-center">
-              <FileVideo className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
-              <p className="text-muted-foreground mb-2">No files in the pipeline.</p>
+              <Zap className="w-12 h-12 mx-auto text-muted-foreground/30 mb-4" />
+              <p className="text-muted-foreground mb-2">
+                No projects yet.
+              </p>
               <p className="text-sm text-muted-foreground/60">
-                Drop a video in the connected Google Drive folder to start.
+                Add an Opus Clip project ID above to get started.
               </p>
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-3">
             <AnimatePresence mode="popLayout">
-              {videos.map((video, i) => {
-                const statusOrder = video.is_photo
-                  ? STATUS_ORDER_PHOTO
-                  : STATUS_ORDER_VIDEO;
-                const statusIdx = statusOrder.indexOf(video.status);
-                const progress =
-                  video.status === "failed"
-                    ? 0
-                    : ((statusIdx + 1) / statusOrder.length) * 100;
-
-                return (
-                  <motion.div
-                    key={video.id}
-                    layout
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    exit={{ opacity: 0, x: -20 }}
-                    transition={{ delay: i * 0.05 }}
-                  >
-                    <Card className="group hover:border-border transition-colors">
-                      <CardContent className="py-4">
-                        <div className="flex items-center justify-between mb-3">
-                          <div className="flex items-center gap-3 min-w-0">
-                            {/* Thumbnail placeholder */}
-                            <div className="w-14 h-10 bg-muted rounded-lg shrink-0 flex items-center justify-center overflow-hidden">
-                              {video.is_photo ? (
-                                <Camera className="w-5 h-5 text-muted-foreground/50" />
-                              ) : (
-                                <Play className="w-5 h-5 text-muted-foreground/50" />
-                              )}
-                            </div>
-                            <div className="min-w-0">
-                              <h3 className="font-medium text-sm truncate">
-                                {video.filename}
-                              </h3>
-                              <p className="text-xs text-muted-foreground">
-                                {(video.size_bytes / (1024 * 1024)).toFixed(1)} MB
-                                {video.duration_seconds &&
-                                  ` / ${Math.round(video.duration_seconds)}s`}
-                                {!video.is_photo &&
-                                  video.duration_seconds != null &&
-                                  (video.duration_seconds >
-                                  LONG_FORM_THRESHOLD_SECONDS ? (
-                                    <span className="ml-1.5 text-cyan-400 font-medium">
-                                      Long-form
-                                    </span>
-                                  ) : (
-                                    <span className="ml-1.5 text-muted-foreground/60">
-                                      Short-form
-                                    </span>
-                                  ))}
-                                {video.opus_clip_score != null && (
-                                  <span className="ml-2 text-yellow-400 font-medium">
-                                    Score: {video.opus_clip_score}
-                                  </span>
-                                )}
-                              </p>
-                            </div>
-                          </div>
+              {projects.map((project, i) => (
+                <motion.div
+                  key={project.id}
+                  layout
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: -20 }}
+                  transition={{ delay: i * 0.05 }}
+                >
+                  <Card className="group">
+                    <CardContent className="py-4">
+                      <div className="flex items-center justify-between">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <Badge
-                              variant="outline"
-                              className={
-                                STATUS_STYLES[video.status] ||
-                                "bg-gray-600 text-white border-transparent"
-                              }
-                            >
-                              {video.status}
-                            </Badge>
-                          </div>
-                        </div>
-
-                        <Progress
-                          value={progress}
-                          className={`h-1.5 ${
-                            video.status === "failed"
-                              ? "[&>div]:bg-red-500"
-                              : "[&>div]:bg-green-500"
-                          }`}
-                        />
-
-                        <div className="flex justify-between mt-2">
-                          {statusOrder.map((s, idx) => (
-                            <span
-                              key={s}
-                              className={`text-[10px] hidden sm:inline ${
-                                idx <= statusIdx
-                                  ? "text-green-400"
-                                  : "text-muted-foreground/40"
-                              }`}
-                            >
-                              {s}
-                            </span>
-                          ))}
-                          <span className="sm:hidden text-[10px] text-muted-foreground">
-                            {statusIdx + 1}/{statusOrder.length}
-                          </span>
-                        </div>
-
-                        {video.error_message && (
-                          <div className="mt-2 flex items-center gap-2">
-                            <p className="text-xs text-destructive flex-1 bg-destructive/10 p-2 rounded">
-                              {video.error_message}
-                            </p>
-                            {video.status === "failed" && (
-                              <Button
-                                size="sm"
+                            <h3 className="font-medium text-sm truncate">
+                              {project.name}
+                            </h3>
+                            {project.autoScheduled && (
+                              <Badge
                                 variant="outline"
-                                onClick={() => handleRetry(video.id)}
-                                disabled={retrying === video.id}
-                                className="shrink-0"
+                                className="border-green-500/50 text-green-400 bg-green-600/10 text-[10px]"
                               >
-                                {retrying === video.id ? (
-                                  <Loader2 className="h-3 w-3 animate-spin" />
-                                ) : (
-                                  <>
-                                    <RotateCcw className="mr-1 h-3 w-3" />
-                                    Retry
-                                  </>
-                                )}
-                              </Button>
+                                Scheduled
+                              </Badge>
                             )}
                           </div>
-                        )}
+                          <p className="text-xs text-muted-foreground mt-0.5">
+                            {project.clipCount} clip
+                            {project.clipCount !== 1 ? "s" : ""} &middot;{" "}
+                            {new Date(project.createdAt).toLocaleDateString()}
+                          </p>
+                          {project.error && (
+                            <p className="text-xs text-destructive mt-1">
+                              {project.error}
+                            </p>
+                          )}
+                        </div>
 
-                        {/* Action buttons for completed items */}
-                        {(video.status as string) === "clipped" && (
-                          <div className="mt-2 flex justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                            <Button size="sm" variant="ghost" className="text-xs gap-1">
-                              <Eye className="h-3 w-3" />
-                              Preview
-                            </Button>
-                            <Button size="sm" variant="ghost" className="text-xs gap-1">
-                              <Sparkles className="h-3 w-3" />
-                              Generate Copy
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => handleReprocess(video.id)}
-                              disabled={reprocessing === video.id}
-                              className="text-xs gap-1"
-                            >
-                              {reprocessing === video.id ? (
-                                <Loader2 className="h-3 w-3 animate-spin" />
-                              ) : (
-                                <>
-                                  <RotateCcw className="h-3 w-3" />
-                                  Reprocess
-                                </>
-                              )}
-                            </Button>
-                          </div>
+                        <div className="flex items-center gap-2">
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => handleViewClips(project.id)}
+                            className="text-xs gap-1"
+                          >
+                            {expandedProject === project.id ? (
+                              <ChevronUp className="h-3 w-3" />
+                            ) : (
+                              <ChevronDown className="h-3 w-3" />
+                            )}
+                            Clips
+                          </Button>
+                          <Button
+                            size="sm"
+                            onClick={() => handleAutoSchedule(project.id)}
+                            disabled={
+                              scheduling === project.id ||
+                              project.clipCount === 0
+                            }
+                            className="gap-1"
+                          >
+                            {scheduling === project.id ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <Zap className="h-3 w-3" />
+                            )}
+                            {project.autoScheduled
+                              ? "Re-Schedule"
+                              : "Auto-Schedule"}
+                          </Button>
+                        </div>
+                      </div>
+
+                      {/* Expanded clips view */}
+                      <AnimatePresence>
+                        {expandedProject === project.id && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2 }}
+                            className="overflow-hidden"
+                          >
+                            <Separator className="my-3" />
+                            {loadingClips === project.id ? (
+                              <div className="flex items-center gap-2 py-4 justify-center">
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <span className="text-sm text-muted-foreground">
+                                  Loading clips...
+                                </span>
+                              </div>
+                            ) : (
+                              <ScheduleView
+                                projectId={project.id}
+                                schedules={schedules}
+                                onCancel={handleCancelSchedule}
+                                cancelling={cancelling}
+                              />
+                            )}
+                          </motion.div>
                         )}
-                      </CardContent>
-                    </Card>
-                  </motion.div>
-                );
-              })}
+                      </AnimatePresence>
+                    </CardContent>
+                  </Card>
+                </motion.div>
+              ))}
             </AnimatePresence>
           </div>
         )}
       </motion.div>
 
-      {/* Source Videos Section (collapsible) */}
+      {/* Schedule Timeline */}
+      {futurePosts.length > 0 && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <h2 className="text-lg font-semibold mb-3">Upcoming Schedule</h2>
+          <Card>
+            <CardContent className="py-4">
+              <div className="space-y-2">
+                {futurePosts.slice(0, 20).map((post, i) => {
+                  const tierStyle = TIER_STYLES[post.viralityTier] || TIER_STYLES.filler;
+                  const platformColor =
+                    PLATFORM_COLORS[post.platform] || "bg-gray-600 text-white";
+
+                  return (
+                    <div
+                      key={`${post.clipId}-${post.platform}-${i}`}
+                      className="flex items-center gap-3 py-2 border-b border-border/50 last:border-0"
+                    >
+                      <div className="w-24 text-xs text-muted-foreground shrink-0">
+                        {formatScheduleTime(post.scheduledAt)}
+                      </div>
+                      <Badge
+                        variant="outline"
+                        className={`${platformColor} text-[10px] shrink-0`}
+                      >
+                        {formatPlatformName(post.platform)}
+                      </Badge>
+                      <span className="text-sm truncate flex-1">
+                        {post.clipTitle}
+                      </span>
+                      <Badge
+                        variant="outline"
+                        className={`${tierStyle.className} text-[10px] shrink-0`}
+                      >
+                        {tierStyle.label}
+                      </Badge>
+                      <span className="text-xs text-muted-foreground shrink-0 w-14 text-right">
+                        {getTimeUntil(post.scheduledAt)}
+                      </span>
+                      {post.scheduleId && (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() =>
+                            post.scheduleId &&
+                            handleCancelSchedule(post.scheduleId)
+                          }
+                          disabled={cancelling === post.scheduleId}
+                          className="shrink-0 h-7 w-7 p-0"
+                        >
+                          {cancelling === post.scheduleId ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3 text-muted-foreground hover:text-destructive" />
+                          )}
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+                {futurePosts.length > 20 && (
+                  <p className="text-xs text-muted-foreground text-center py-2">
+                    + {futurePosts.length - 20} more scheduled posts
+                  </p>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* Connected Accounts (collapsible) */}
       <motion.div
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ delay: 0.3 }}
+        transition={{ delay: 0.25 }}
       >
         <button
-          onClick={() => setSourceVideosOpen(!sourceVideosOpen)}
+          onClick={() => setAccountsOpen(!accountsOpen)}
           className="flex items-center gap-2 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors w-full"
         >
-          {sourceVideosOpen ? (
+          {accountsOpen ? (
             <ChevronUp className="w-4 h-4" />
           ) : (
             <ChevronDown className="w-4 h-4" />
           )}
-          Source Videos
-          <span className="text-xs text-muted-foreground/60">(long-form originals)</span>
+          <Users className="w-4 h-4" />
+          Connected Accounts
+          <Badge variant="secondary" className="text-[10px] ml-1">
+            {accounts.length}
+          </Badge>
         </button>
 
         <AnimatePresence>
-          {sourceVideosOpen && (
+          {accountsOpen && (
             <motion.div
               initial={{ height: 0, opacity: 0 }}
               animate={{ height: "auto", opacity: 1 }}
@@ -528,26 +682,173 @@ export default function ImportPage() {
               className="overflow-hidden"
             >
               <Card className="mt-3">
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">Register Source Video</CardTitle>
-                    <Button size="sm" variant="outline" className="gap-1">
-                      <Plus className="h-3 w-3" />
-                      Add Source
-                    </Button>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground text-center py-6">
-                    Source video registration coming soon. For now, clips are automatically
-                    imported from Google Drive.
-                  </p>
+                <CardContent className="py-4">
+                  {accounts.length === 0 ? (
+                    <p className="text-sm text-muted-foreground text-center py-4">
+                      No social accounts connected in Opus Clip. Connect
+                      accounts in your Opus Clip dashboard.
+                    </p>
+                  ) : (
+                    <div className="space-y-3">
+                      {accounts.map((account) => {
+                        const platformColor =
+                          PLATFORM_COLORS[account.platform] ||
+                          "bg-gray-600 text-white";
+
+                        return (
+                          <div
+                            key={account.postAccountId}
+                            className="flex items-center gap-3"
+                          >
+                            <Badge
+                              variant="outline"
+                              className={`${platformColor} text-xs shrink-0`}
+                            >
+                              {formatPlatformName(account.platform)}
+                            </Badge>
+                            <span className="text-sm">
+                              {account.extUserName}
+                            </span>
+                            {account.extUserProfileLink && (
+                              <a
+                                href={account.extUserProfileLink}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-muted-foreground hover:text-foreground"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                              </a>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
                 </CardContent>
               </Card>
             </motion.div>
           )}
         </AnimatePresence>
       </motion.div>
+    </div>
+  );
+}
+
+// --- Sub-component: Schedule View for a project ---
+
+function ScheduleView({
+  projectId,
+  schedules,
+  onCancel,
+  cancelling,
+}: {
+  projectId: string;
+  schedules: ScheduleData[];
+  onCancel: (scheduleId: string) => void;
+  cancelling: string | null;
+}) {
+  const schedule = schedules.find((s) => s.projectId === projectId);
+
+  if (!schedule || !schedule.posts || schedule.posts.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground text-center py-4">
+        No schedule data yet. Click &quot;Auto-Schedule&quot; to distribute clips.
+      </p>
+    );
+  }
+
+  // Group posts by clip
+  const clipGroups: Record<
+    string,
+    { title: string; rank: number; tier: string; posts: ScheduledPostEntry[] }
+  > = {};
+
+  for (const post of schedule.posts) {
+    if (!clipGroups[post.clipId]) {
+      clipGroups[post.clipId] = {
+        title: post.clipTitle,
+        rank: post.viralityRank,
+        tier: post.viralityTier,
+        posts: [],
+      };
+    }
+    clipGroups[post.clipId].posts.push(post);
+  }
+
+  return (
+    <div className="space-y-3">
+      {Object.entries(clipGroups).map(([clipId, group]) => {
+        const tierStyle = TIER_STYLES[group.tier] || TIER_STYLES.filler;
+
+        return (
+          <div key={clipId} className="bg-accent/30 rounded-lg p-3">
+            <div className="flex items-center gap-2 mb-2">
+              <Play className="w-3 h-3 text-muted-foreground" />
+              <span className="text-sm font-medium truncate flex-1">
+                {group.title}
+              </span>
+              <Badge
+                variant="outline"
+                className={`${tierStyle.className} text-[10px]`}
+              >
+                {tierStyle.label} ({group.rank})
+              </Badge>
+            </div>
+            <div className="space-y-1 ml-5">
+              {group.posts.map((post, i) => {
+                const platformColor =
+                  PLATFORM_COLORS[post.platform] || "bg-gray-600 text-white";
+
+                return (
+                  <div
+                    key={`${post.platform}-${i}`}
+                    className="flex items-center gap-2 text-xs"
+                  >
+                    <Badge
+                      variant="outline"
+                      className={`${platformColor} text-[9px] px-1.5 py-0`}
+                    >
+                      {formatPlatformName(post.platform)}
+                    </Badge>
+                    <span className="text-muted-foreground">
+                      {formatScheduleTime(post.scheduledAt)}
+                    </span>
+                    <span className="text-muted-foreground/60">
+                      ({getTimeUntil(post.scheduledAt)})
+                    </span>
+                    {post.scheduleId && (
+                      <button
+                        onClick={() =>
+                          post.scheduleId && onCancel(post.scheduleId)
+                        }
+                        disabled={cancelling === post.scheduleId}
+                        className="ml-auto text-muted-foreground hover:text-destructive"
+                      >
+                        {cancelling === post.scheduleId ? (
+                          <Loader2 className="h-3 w-3 animate-spin" />
+                        ) : (
+                          <Trash2 className="h-3 w-3" />
+                        )}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+
+      {schedule.errors.length > 0 && (
+        <div className="bg-destructive/10 rounded-lg p-3">
+          <p className="text-xs font-medium text-destructive mb-1">Errors:</p>
+          {schedule.errors.map((err, i) => (
+            <p key={i} className="text-xs text-destructive/80">
+              {err}
+            </p>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

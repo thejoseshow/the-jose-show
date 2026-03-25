@@ -1,10 +1,19 @@
 import { NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
-import { scanDriveForClips, importClip } from "@/lib/pipeline";
+import { scanDriveForClips } from "@/lib/pipeline";
 
 export const maxDuration = 300;
 
-// POST /api/pipeline/process - Manual trigger: scan Drive for new Opus Clip exports and import them
+/**
+ * POST /api/pipeline/process
+ *
+ * Legacy route: scan Drive for new Opus Clip exports.
+ * Direct clip imports via Drive have been replaced by the Opus Clip API
+ * scheduling workflow (/api/opus-clip/schedule).
+ *
+ * This route now only reports what's available in Drive — actual scheduling
+ * is handled via the Opus Clip projects UI or the process-uploads cron.
+ */
 export async function POST() {
   const session = await getSession();
   if (!session?.authenticated) {
@@ -15,43 +24,19 @@ export async function POST() {
     // Scan for new clips in the Opus Clip Drive folder
     const newClips = await scanDriveForClips();
 
-    if (newClips.length === 0) {
-      return NextResponse.json({
-        success: true,
-        new_files_detected: 0,
-        processed: 0,
-        message: "No new clips found in Opus Clip folder",
-      });
-    }
-
-    let processed = 0;
-    const errors: string[] = [];
-
-    // Import clips sequentially
-    for (const clip of newClips.slice(0, 10)) {
-      try {
-        const result = await importClip({
-          driveFileId: clip.id,
-          generateCopy: true,
-        });
-
-        if (result.status === "failed") {
-          errors.push(`${clip.name}: ${result.error || "Unknown error"}`);
-        } else {
-          processed++;
-        }
-      } catch (err) {
-        errors.push(
-          `${clip.name}: ${err instanceof Error ? err.message : "Unknown error"}`
-        );
-      }
-    }
-
     return NextResponse.json({
       success: true,
       new_files_detected: newClips.length,
-      processed,
-      errors: errors.length > 0 ? errors : undefined,
+      files: newClips.slice(0, 20).map((c) => ({
+        id: c.id,
+        name: c.name,
+        size: c.size,
+        createdTime: c.createdTime,
+      })),
+      message:
+        newClips.length === 0
+          ? "No new clips found in Opus Clip folder"
+          : `Found ${newClips.length} new clip(s). Use the Schedule page or Opus Clip API to schedule them.`,
     });
   } catch (err) {
     return NextResponse.json(

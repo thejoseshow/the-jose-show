@@ -1,10 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { scanDriveForClips, importClip } from "@/lib/pipeline";
+import { scanDriveForClips } from "@/lib/pipeline";
 
 export const maxDuration = 300;
 
-// POST /api/webhooks/google-drive - Google Drive push notification
-// When new files appear in the Opus Clip folder, auto-import them.
+/**
+ * POST /api/webhooks/google-drive
+ *
+ * Google Drive push notification webhook.
+ * When new files appear in the Opus Clip folder, log them.
+ *
+ * Direct clip imports via Drive have been replaced by the Opus Clip API
+ * scheduling workflow. This webhook now only logs new files — actual
+ * scheduling is handled via the Schedule page or process-uploads cron.
+ */
 export async function POST(request: NextRequest) {
   // Verify the webhook comes from Google
   const channelId = request.headers.get("x-goog-channel-id");
@@ -26,25 +34,20 @@ export async function POST(request: NextRequest) {
 
   try {
     const newClips = await scanDriveForClips();
-    let processed = 0;
 
-    // Import up to 5 clips per webhook trigger
-    for (const clip of newClips.slice(0, 5)) {
-      try {
-        const result = await importClip({
-          driveFileId: clip.id,
-          generateCopy: true,
-        });
-        if (result.status !== "failed") processed++;
-      } catch (err) {
-        console.error(`Drive webhook import error for ${clip.name}:`, err);
-      }
+    if (newClips.length > 0) {
+      console.log(
+        `Drive webhook: ${newClips.length} new clip(s) detected. Use Schedule page or process-uploads cron to schedule.`
+      );
     }
 
     return NextResponse.json({
       success: true,
       new_clips: newClips.length,
-      processed,
+      message:
+        newClips.length > 0
+          ? "New clips detected. Use Opus Clip API scheduling."
+          : "No new clips",
     });
   } catch (err) {
     console.error("Drive webhook error:", err);

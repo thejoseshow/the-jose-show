@@ -2,26 +2,26 @@
 // The Jose Show - Import Pipeline
 // ============================================================
 //
-// Clean import-oriented pipeline for Opus Clip workflow.
-// No FFmpeg or Whisper — clips arrive pre-edited from Opus Clip.
+// Legacy import pipeline — direct clip imports have been replaced
+// by Opus Clip API scheduling (see /api/opus-clip/schedule).
+// Retained for Drive scanning and status helpers.
 
 import { google } from "googleapis";
 import { supabase } from "./supabase";
 import { getAuthenticatedClient } from "./google-drive";
 import { getAppSetting } from "./settings";
-import {
-  importClipFromDrive,
-  importClipFromUpload,
-  generateCopyForClip,
-  type ImportResult,
-} from "./opus-clip";
 import type { Video } from "./types";
 
-// --- Main Entry Point ---
+// --- Types ---
+
+export interface ImportResult {
+  status: "imported" | "ready" | "failed";
+  clipId?: string;
+  contentId?: string;
+  error?: string;
+}
 
 export interface ImportClipOptions {
-  /** Google Drive file ID (for Drive imports) */
-  driveFileId?: string;
   /** File buffer (for direct uploads) */
   buffer?: Buffer;
   /** Original filename */
@@ -35,42 +35,61 @@ export interface ImportClipOptions {
 }
 
 /**
- * Import a single clip from either Google Drive or a direct upload.
- * Optionally generates AI copy after import.
+ * Import a single clip from a direct upload.
+ * Stores the file in Supabase Storage and creates a video record.
+ *
+ * Note: Drive-based imports and Opus Clip scheduling are now handled
+ * via /api/opus-clip/schedule — this function is for manual uploads only.
  */
 export async function importClip(
   options: ImportClipOptions
 ): Promise<ImportResult> {
-  const { driveFileId, buffer, filename, mimeType, sourceVideoId, generateCopy = true } = options;
+  const { buffer, filename, mimeType, sourceVideoId } = options;
 
-  let result: ImportResult;
-
-  if (driveFileId) {
-    result = await importClipFromDrive(driveFileId, sourceVideoId);
-  } else if (buffer && filename) {
-    result = await importClipFromUpload(
-      buffer,
-      filename,
-      mimeType || "video/mp4",
-      sourceVideoId
-    );
-  } else {
-    throw new Error("Must provide either driveFileId or buffer + filename");
+  if (!buffer || !filename) {
+    throw new Error("Must provide buffer + filename for upload import");
   }
 
-  // Generate AI copy if import succeeded
-  if (generateCopy && result.status === "imported" && result.clipId) {
-    try {
-      const contentId = await generateCopyForClip(result.clipId);
-      result.contentId = contentId;
-      result.status = "ready";
-    } catch (err) {
-      console.error(`Copy generation failed for clip ${result.clipId}:`, err);
-      // Import still succeeded — content can be generated later
+  try {
+    const storagePath = `clips/${Date.now()}-${filename}`;
+    const { error: uploadError } = await supabase.storage
+      .from("media")
+      .upload(storagePath, buffer, {
+        contentType: mimeType || "video/mp4",
+        upsert: false,
+      });
+
+    if (uploadError) {
+      return { status: "failed", error: uploadError.message };
     }
-  }
 
-  return result;
+    const { data: video, error: insertError } = await supabase
+      .from("videos")
+      .insert({
+        filename,
+        mime_type: mimeType || "video/mp4",
+        size_bytes: buffer.length,
+        storage_path: storagePath,
+        source_video_id: sourceVideoId || null,
+        source_type: "manual_upload",
+        status: "imported",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      })
+      .select("id")
+      .single();
+
+    if (insertError || !video) {
+      return { status: "failed", error: insertError?.message || "Insert failed" };
+    }
+
+    return { status: "imported", clipId: video.id };
+  } catch (err) {
+    return {
+      status: "failed",
+      error: err instanceof Error ? err.message : "Import failed",
+    };
+  }
 }
 
 // --- Drive Scanning ---

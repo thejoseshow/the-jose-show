@@ -22,7 +22,8 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Loader2, Trash2, HardDrive, Clock, Zap } from "lucide-react";
+import { Loader2, Trash2, HardDrive, Clock, Zap, Scissors, Youtube, FolderOpen, Plus, X } from "lucide-react";
+import type { MonitoredChannel } from "@/lib/types";
 
 interface StorageStats {
   total_files: number;
@@ -108,6 +109,23 @@ export default function SettingsPage() {
   const [mediumThreshold, setMediumThreshold] = useState(50);
   const [maxPostsPerDay, setMaxPostsPerDay] = useState(3);
   const [autoApproveLoading, setAutoApproveLoading] = useState(true);
+  const [opusAutoSchedule, setOpusAutoSchedule] = useState(false);
+  const [opusPlatforms, setOpusPlatforms] = useState<Record<string, boolean>>({
+    youtube: true,
+    tiktok_business: true,
+    facebook_page: true,
+    instagram_business: true,
+    linkedin: false,
+    twitter: false,
+  });
+  // YouTube channel monitoring
+  const [monitoredChannels, setMonitoredChannels] = useState<MonitoredChannel[]>([]);
+  const [channelInput, setChannelInput] = useState("");
+  const [addingChannel, setAddingChannel] = useState(false);
+  const [removingChannel, setRemovingChannel] = useState<string | null>(null);
+  // Google Drive monitoring
+  const [driveMonitorEnabled, setDriveMonitorEnabled] = useState(false);
+  const [driveFolderName, setDriveFolderName] = useState("opus-clips");
 
   const fetchConnections = useCallback(async () => {
     try {
@@ -166,11 +184,36 @@ export default function SettingsPage() {
         if (data.data?.max_posts_per_day != null) {
           setMaxPostsPerDay(Number(data.data.max_posts_per_day) || 3);
         }
+        if (data.data?.opus_clip_auto_schedule != null) {
+          setOpusAutoSchedule(data.data.opus_clip_auto_schedule === true || data.data.opus_clip_auto_schedule === "true");
+        }
+        if (data.data?.opus_clip_platforms != null) {
+          const parsed = typeof data.data.opus_clip_platforms === "string"
+            ? JSON.parse(data.data.opus_clip_platforms)
+            : data.data.opus_clip_platforms;
+          setOpusPlatforms(parsed);
+        }
+        if (data.data?.drive_monitor_enabled != null) {
+          setDriveMonitorEnabled(data.data.drive_monitor_enabled === true || data.data.drive_monitor_enabled === "true");
+        }
+        if (data.data?.drive_opus_folder != null) {
+          setDriveFolderName(String(data.data.drive_opus_folder) || "opus-clips");
+        }
       }
     } catch {
       // Settings are non-critical
     }
     setAutoApproveLoading(false);
+  }, []);
+
+  const fetchChannels = useCallback(async () => {
+    try {
+      const res = await fetch("/api/channels");
+      const data = await res.json();
+      if (data.success) setMonitoredChannels(data.data || []);
+    } catch {
+      // Non-critical
+    }
   }, []);
 
   const fetchOptimalTimes = useCallback(async () => {
@@ -188,7 +231,8 @@ export default function SettingsPage() {
     fetchStorageStats();
     fetchSettings();
     fetchOptimalTimes();
-  }, [fetchConnections, fetchStorageStats, fetchSettings, fetchOptimalTimes]);
+    fetchChannels();
+  }, [fetchConnections, fetchStorageStats, fetchSettings, fetchOptimalTimes, fetchChannels]);
 
   async function handleDisconnect(platform: string) {
     setDisconnecting(platform);
@@ -387,6 +431,142 @@ export default function SettingsPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ max_posts_per_day: clamped }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleOpusAutoScheduleToggle(checked: boolean) {
+    setOpusAutoSchedule(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opus_clip_auto_schedule: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "Opus Clip auto-scheduling enabled" : "Opus Clip auto-scheduling disabled");
+      } else {
+        setOpusAutoSchedule(!checked);
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setOpusAutoSchedule(!checked);
+      toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleOpusPlatformToggle(platform: string, checked: boolean) {
+    const updated = { ...opusPlatforms, [platform]: checked };
+    setOpusPlatforms(updated);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ opus_clip_platforms: updated }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleAddChannel() {
+    if (!channelInput.trim()) return;
+    setAddingChannel(true);
+    try {
+      const res = await fetch("/api/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ input: channelInput.trim() }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(`Now monitoring "${data.data.channel_name}"`);
+        setChannelInput("");
+        await fetchChannels();
+      } else {
+        toast.error(data.error || "Failed to add channel");
+      }
+    } catch {
+      toast.error("Failed to add channel");
+    }
+    setAddingChannel(false);
+  }
+
+  async function handleRemoveChannel(id: string) {
+    setRemovingChannel(id);
+    try {
+      const res = await fetch(`/api/channels/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        toast.success("Channel removed");
+        await fetchChannels();
+      } else {
+        toast.error(data.error || "Failed to remove channel");
+      }
+    } catch {
+      toast.error("Failed to remove channel");
+    }
+    setRemovingChannel(null);
+  }
+
+  async function handleChannelToggle(id: string, field: "enabled" | "auto_clip", checked: boolean) {
+    // Optimistic update
+    setMonitoredChannels((prev) =>
+      prev.map((ch) => (ch.id === id ? { ...ch, [field]: checked } : ch))
+    );
+    try {
+      const res = await fetch(`/api/channels/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: checked }),
+      });
+      const data = await res.json();
+      if (!data.success) {
+        // Revert
+        setMonitoredChannels((prev) =>
+          prev.map((ch) => (ch.id === id ? { ...ch, [field]: !checked } : ch))
+        );
+        toast.error(data.error || "Failed to update channel");
+      }
+    } catch {
+      setMonitoredChannels((prev) =>
+        prev.map((ch) => (ch.id === id ? { ...ch, [field]: !checked } : ch))
+      );
+      toast.error("Failed to update channel");
+    }
+  }
+
+  async function handleDriveMonitorToggle(checked: boolean) {
+    setDriveMonitorEnabled(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drive_monitor_enabled: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "Drive monitoring enabled" : "Drive monitoring disabled");
+      } else {
+        setDriveMonitorEnabled(!checked);
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setDriveMonitorEnabled(!checked);
+      toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleDriveFolderChange(value: string) {
+    setDriveFolderName(value);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ drive_opus_folder: value }),
       });
     } catch {
       // Non-critical
@@ -804,6 +984,60 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
 
+          {/* Opus Clip Integration */}
+          <Card>
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Scissors className="w-4 h-4 text-purple-400" />
+                  <div>
+                    <p className="text-sm font-medium">Opus Clip</p>
+                    <p className="text-xs text-muted-foreground">
+                      Auto-schedule new projects via Opus Clip API
+                    </p>
+                  </div>
+                </div>
+                {autoApproveLoading ? (
+                  <Skeleton className="h-5 w-10" />
+                ) : (
+                  <Switch checked={opusAutoSchedule} onCheckedChange={handleOpusAutoScheduleToggle} />
+                )}
+              </div>
+
+              {opusAutoSchedule && (
+                <>
+                  <Separator />
+                  <div className="space-y-3">
+                    <p className="text-xs text-muted-foreground">
+                      Enable platforms for auto-scheduling:
+                    </p>
+                    {([
+                      ["youtube", "YouTube"],
+                      ["tiktok_business", "TikTok"],
+                      ["facebook_page", "Facebook"],
+                      ["instagram_business", "Instagram"],
+                      ["linkedin", "LinkedIn"],
+                      ["twitter", "Twitter"],
+                    ] as const).map(([key, label]) => (
+                      <div key={key} className="flex items-center justify-between">
+                        <Label className="text-sm text-muted-foreground">{label}</Label>
+                        <Switch
+                          checked={opusPlatforms[key] ?? false}
+                          onCheckedChange={(checked) => handleOpusPlatformToggle(key, checked)}
+                        />
+                      </div>
+                    ))}
+                  </div>
+
+                  <Separator />
+                  <p className="text-xs text-muted-foreground">
+                    API key is configured via the <code className="text-xs bg-muted px-1 py-0.5 rounded">OPUS_CLIP_API_KEY</code> environment variable.
+                  </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
           {/* Optimal Posting Times */}
           <Card>
             <CardContent className="pt-5 space-y-4">
@@ -850,6 +1084,185 @@ export default function SettingsPage() {
             </CardContent>
           </Card>
         </div>
+      </div>
+
+      <Separator />
+
+      {/* YouTube Channel Monitoring */}
+      <div>
+        <h2 className="text-lg font-semibold text-white mb-4">YouTube Channel Monitoring</h2>
+        <Card>
+          <CardContent className="pt-5 space-y-5">
+            <div className="flex items-center gap-2 mb-1">
+              <Youtube className="w-4 h-4 text-red-500" />
+              <div>
+                <p className="text-sm font-medium">Monitored Channels</p>
+                <p className="text-xs text-muted-foreground">
+                  New videos from these channels are automatically sent to Opus Clip for clipping and scheduling
+                </p>
+              </div>
+            </div>
+
+            {/* Add channel input */}
+            <div className="flex gap-2">
+              <Input
+                placeholder="YouTube URL, @handle, or channel ID"
+                value={channelInput}
+                onChange={(e) => setChannelInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleAddChannel();
+                }}
+                className="flex-1"
+              />
+              <Button
+                onClick={handleAddChannel}
+                disabled={addingChannel || !channelInput.trim()}
+                size="sm"
+              >
+                {addingChannel ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <Plus className="w-4 h-4 mr-1" />
+                    Add
+                  </>
+                )}
+              </Button>
+            </div>
+
+            {/* Channel list */}
+            {monitoredChannels.length === 0 ? (
+              <p className="text-xs text-muted-foreground text-center py-4">
+                No channels being monitored yet. Add a YouTube channel above to get started.
+              </p>
+            ) : (
+              <div className="space-y-3">
+                {monitoredChannels.map((channel) => (
+                  <div
+                    key={channel.id}
+                    className="flex items-center justify-between p-3 rounded-lg border border-border/50 bg-muted/20"
+                  >
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium truncate">
+                          {channel.channel_name}
+                        </p>
+                        <Badge
+                          variant="outline"
+                          className={
+                            channel.enabled
+                              ? "border-green-500/50 text-green-400 bg-green-600/10 text-xs"
+                              : "border-transparent text-muted-foreground bg-muted text-xs"
+                          }
+                        >
+                          {channel.enabled ? "Active" : "Paused"}
+                        </Badge>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {channel.channel_id}
+                        {channel.last_checked_at && (
+                          <span className="ml-2">
+                            Last checked:{" "}
+                            {new Date(channel.last_checked_at).toLocaleDateString("en-US", {
+                              month: "short",
+                              day: "numeric",
+                              hour: "numeric",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        )}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-3 ml-3">
+                      <div className="flex flex-col items-center gap-1">
+                        <Label className="text-[10px] text-muted-foreground">Enabled</Label>
+                        <Switch
+                          checked={channel.enabled}
+                          onCheckedChange={(checked) =>
+                            handleChannelToggle(channel.id, "enabled", checked)
+                          }
+                        />
+                      </div>
+                      <div className="flex flex-col items-center gap-1">
+                        <Label className="text-[10px] text-muted-foreground">Auto-clip</Label>
+                        <Switch
+                          checked={channel.auto_clip}
+                          onCheckedChange={(checked) =>
+                            handleChannelToggle(channel.id, "auto_clip", checked)
+                          }
+                        />
+                      </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleRemoveChannel(channel.id)}
+                        disabled={removingChannel === channel.id}
+                        className="text-muted-foreground hover:text-red-400"
+                      >
+                        {removingChannel === channel.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <X className="w-4 h-4" />
+                        )}
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <Separator />
+            <p className="text-xs text-muted-foreground">
+              Channels are checked every 15 minutes. Requires <code className="text-xs bg-muted px-1 py-0.5 rounded">YOUTUBE_API_KEY</code> environment variable.
+            </p>
+          </CardContent>
+        </Card>
+      </div>
+
+      <Separator />
+
+      {/* Google Drive Monitoring */}
+      <div>
+        <h2 className="text-lg font-semibold text-white mb-4">Google Drive Monitoring</h2>
+        <Card>
+          <CardContent className="pt-5 space-y-5">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <FolderOpen className="w-4 h-4 text-yellow-400" />
+                <div>
+                  <p className="text-sm font-medium">Monitor Google Drive Folder</p>
+                  <p className="text-xs text-muted-foreground">
+                    Videos dropped in this Drive folder are sent to Opus Clip for clipping
+                  </p>
+                </div>
+              </div>
+              {autoApproveLoading ? (
+                <Skeleton className="h-5 w-10" />
+              ) : (
+                <Switch checked={driveMonitorEnabled} onCheckedChange={handleDriveMonitorToggle} />
+              )}
+            </div>
+
+            {driveMonitorEnabled && (
+              <>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  <Label className="text-sm text-muted-foreground">Folder name</Label>
+                  <Input
+                    value={driveFolderName}
+                    onChange={(e) => handleDriveFolderChange(e.target.value)}
+                    placeholder="opus-clips"
+                    className="w-48 text-center"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The process-uploads cron will detect new files in this folder and create Opus Clip projects automatically.
+                </p>
+              </>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

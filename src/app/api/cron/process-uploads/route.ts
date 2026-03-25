@@ -1,14 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth";
-import { scanDriveForClips, importClip } from "@/lib/pipeline";
+import { withCronLog } from "@/lib/cron-logger";
+import {
+  autoScheduleProject,
+  getProcessedProjectIds,
+  markProjectProcessed,
+  getProjectClips,
+} from "@/lib/opus-clip";
+import { getAppSetting } from "@/lib/settings";
 
 export const maxDuration = 300; // 5 min
 
 /**
  * GET /api/cron/process-uploads
  *
- * Scans the Opus Clip Drive folder (configured via app_settings.opus_clip_drive_folder)
- * for new clip files. Imports each through the pipeline and generates AI copy.
+ * Checks for new Opus Clip projects that haven't been auto-scheduled yet.
+ * For each new project, runs autoScheduleProject() to distribute clips
+ * across connected social platforms based on virality ranking.
  */
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
@@ -16,66 +24,95 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // Scan for new clips in the Opus Clip Drive folder
-    const newClips = await scanDriveForClips();
-
-    if (newClips.length === 0) {
-      return NextResponse.json({
-        success: true,
-        message: "No new clips found",
-        processed: 0,
-      });
-    }
-
-    console.log(`Found ${newClips.length} new clips to import`);
-
-    const results = [];
-    let imported = 0;
-    let failed = 0;
-
-    // Process clips sequentially to avoid overwhelming resources
-    for (const clip of newClips) {
-      try {
-        console.log(`Importing: ${clip.name} (${clip.id})`);
-
-        const result = await importClip({
-          driveFileId: clip.id,
-          generateCopy: true,
-        });
-
-        results.push({
-          filename: clip.name,
-          driveFileId: clip.id,
-          ...result,
-        });
-
-        if (result.status === "failed") {
-          failed++;
-          console.error(`Failed to import ${clip.name}: ${result.error}`);
-        } else {
-          imported++;
-          console.log(`Imported ${clip.name} -> video ${result.videoId}`);
-        }
-      } catch (err) {
-        failed++;
-        const errorMsg = err instanceof Error ? err.message : String(err);
-        console.error(`Error importing ${clip.name}:`, errorMsg);
-        results.push({
-          filename: clip.name,
-          driveFileId: clip.id,
-          status: "failed",
-          error: errorMsg,
-        });
+    const result = await withCronLog("process-uploads", async () => {
+      // Check if auto-scheduling is enabled
+      const autoScheduleEnabled = await getAppSetting<boolean>(
+        "opus_clip_auto_schedule"
+      );
+      if (autoScheduleEnabled === false) {
+        return {
+          message: "Opus Clip auto-scheduling is disabled",
+          processed: 0,
+          scheduled: 0,
+        };
       }
-    }
 
-    return NextResponse.json({
-      success: true,
-      message: `Processed ${newClips.length} clips: ${imported} imported, ${failed} failed`,
-      processed: imported,
-      failed,
-      results,
+      // Get list of pending project IDs to process
+      const pendingProjects = await getAppSetting<string[]>(
+        "opus_clip_pending_projects"
+      );
+
+      if (!pendingProjects || pendingProjects.length === 0) {
+        return {
+          message: "No pending Opus Clip projects to process",
+          processed: 0,
+          scheduled: 0,
+        };
+      }
+
+      const processedIds = await getProcessedProjectIds();
+      const newProjects = pendingProjects.filter(
+        (id) => !processedIds.includes(id)
+      );
+
+      if (newProjects.length === 0) {
+        return {
+          message: "All pending projects already processed",
+          processed: 0,
+          scheduled: 0,
+        };
+      }
+
+      console.log(
+        `Found ${newProjects.length} new Opus Clip project(s) to auto-schedule`
+      );
+
+      let totalScheduled = 0;
+      const results = [];
+
+      for (const projectId of newProjects) {
+        try {
+          console.log(`Auto-scheduling project: ${projectId}`);
+          const scheduleResult = await autoScheduleProject(projectId);
+          totalScheduled += scheduleResult.totalScheduled;
+
+          await markProjectProcessed(projectId);
+
+          results.push({
+            projectId,
+            clips: scheduleResult.totalClips,
+            scheduled: scheduleResult.totalScheduled,
+            errors: scheduleResult.errors,
+          });
+
+          console.log(
+            `Project ${projectId}: ${scheduleResult.totalScheduled} posts scheduled across ${scheduleResult.totalClips} clips`
+          );
+        } catch (err) {
+          const errorMsg =
+            err instanceof Error ? err.message : String(err);
+          console.error(
+            `Error auto-scheduling project ${projectId}:`,
+            errorMsg
+          );
+          results.push({
+            projectId,
+            clips: 0,
+            scheduled: 0,
+            errors: [errorMsg],
+          });
+        }
+      }
+
+      return {
+        message: `Processed ${newProjects.length} project(s), ${totalScheduled} total posts scheduled`,
+        processed: newProjects.length,
+        scheduled: totalScheduled,
+        results,
+      };
     });
+
+    return NextResponse.json({ success: true, ...result });
   } catch (err) {
     console.error("process-uploads cron error:", err);
     return NextResponse.json(

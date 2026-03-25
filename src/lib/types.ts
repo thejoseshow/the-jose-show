@@ -258,6 +258,46 @@ export interface PerformanceInsight {
   created_at: string;
 }
 
+// --- YouTube Monitor Types ---
+
+export interface MonitoredChannel {
+  id: string;
+  channel_id: string;
+  channel_name: string;
+  uploads_playlist_id: string;
+  last_checked_video_id: string | null;
+  last_checked_at: string | null;
+  enabled: boolean;
+  auto_clip: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// --- Opus Clip Scheduling Types ---
+
+export interface ScheduledPost {
+  id: string;
+  projectId: string;
+  clipId: string;
+  clipTitle: string;
+  platform: string;
+  accountName: string;
+  scheduledAt: string;
+  viralityRank: number;
+  viralityTier: "hot" | "medium" | "filler";
+  scheduleId: string;
+  status: "scheduled" | "published" | "cancelled" | "failed";
+  createdAt: string;
+}
+
+export interface OpusClipProjectSummary {
+  id: string;
+  name: string;
+  clipCount: number;
+  createdAt: string;
+  autoScheduled: boolean;
+}
+
 // --- API / UI Types ---
 
 export interface DashboardStats {

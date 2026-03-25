@@ -21,6 +21,7 @@ import {
   Download,
   Plus,
   CalendarDays,
+  Youtube,
 } from "lucide-react";
 import {
   LineChart,
@@ -89,6 +90,7 @@ export default function DashboardPage() {
   const [recentContent, setRecentContent] = useState<ContentListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [platformStats, setPlatformStats] = useState<PlatformStat[]>([]);
+  const [monitoredChannelCount, setMonitoredChannelCount] = useState(0);
 
   useEffect(() => {
     async function load() {
@@ -102,6 +104,20 @@ export default function DashboardPage() {
 
         if (statsData.success) setStats(statsData.data);
         if (contentData.success) setRecentContent(contentData.data || []);
+
+        // Fetch monitored channel count
+        try {
+          const channelsRes = await fetch("/api/channels");
+          const channelsData = await channelsRes.json();
+          if (channelsData.success) {
+            const enabled = (channelsData.data || []).filter(
+              (ch: { enabled: boolean }) => ch.enabled
+            );
+            setMonitoredChannelCount(enabled.length);
+          }
+        } catch {
+          // Non-critical
+        }
 
         // Build platform stats from analytics if available
         try {
@@ -286,6 +302,14 @@ export default function DashboardPage() {
             View Calendar
           </Link>
         </Button>
+        {monitoredChannelCount > 0 && (
+          <Button asChild variant="outline">
+            <Link href="/dashboard/settings">
+              <Youtube className="w-4 h-4 mr-2 text-red-500" />
+              {monitoredChannelCount} Channel{monitoredChannelCount !== 1 ? "s" : ""} Monitored
+            </Link>
+          </Button>
+        )}
       </motion.div>
 
       {/* Live Stats Row */}

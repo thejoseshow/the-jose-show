@@ -1,442 +1,545 @@
 // ============================================================
-// The Jose Show - Opus Clip Import Module
+// The Jose Show - Opus Clip API Client
 // ============================================================
 //
-// Handles importing pre-edited clips from Opus Clip via Google Drive
-// or direct upload. No FFmpeg or Whisper needed — Opus Clip already
-// handles clipping, captions, and face tracking.
+// Integrates with the Opus Clip API to fetch projects, clips,
+// and schedule posts across connected social platforms.
+// Uses virality ranking from Opus's internal quality sorting.
+//
+// Env var: OPUS_CLIP_API_KEY
 
-import { supabase } from "./supabase";
-import { downloadFile, getFileMetadata } from "./google-drive";
-import { uploadClip } from "./storage";
-import { generatePlatformCopy } from "./claude";
 import { getAppSetting } from "./settings";
-import type { Platform, ImportSource } from "./types";
+import { getOptimalPostingTimes } from "./optimal-times";
 
-// --- Filename Parsing ---
+// --- Types ---
 
-export interface OpusClipMeta {
-  viralityScore: number | null;
-  title: string | null;
-  hasCaptions: boolean;
-  hasFaceTracking: boolean;
-  raw: string;
+export interface OpusClipProject {
+  id: string;
+  name?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  clipCount?: number;
 }
 
-/**
- * Parse metadata from an Opus Clip export filename.
- *
- * Opus Clip names files in patterns like:
- *   "85_Working on my footwork today_captions.mp4"
- *   "92 - Best bachata practice session.mp4"
- *   "clip_75_Dominican style footwork.mp4"
- *
- * We extract: virality score (leading number), title, and flag markers.
- */
-export function parseOpusClipExport(filename: string): OpusClipMeta {
-  const raw = filename;
+export interface OpusClipClip {
+  id: string;
+  projectId: string;
+  title: string;
+  description: string;
+  text: string;
+  hashtags: string[];
+  keywords: string[];
+  genre?: string;
+  subgenre?: string;
+  durationMs: number;
+  uriForPreview: string;
+  uriForExport: string;
+  timeRanges?: unknown;
+  createdAt: string;
+  updatedAt: string;
+  renderPref?: unknown;
+  // Computed field: position-based virality rank (100 = best)
+  viralityRank: number;
+}
 
-  // Strip extension
-  const name = filename.replace(/\.[^.]+$/, "");
+export interface OpusSocialAccount {
+  postAccountId: string;
+  subAccountId?: string;
+  platform: string;
+  extUserId: string;
+  extUserName: string;
+  extUserPictureLink?: string;
+  extUserProfileLink?: string;
+}
 
-  // Detect feature flags from filename
-  const hasCaptions =
-    /captions|subtitles|cc/i.test(name);
-  const hasFaceTracking =
-    /facetrack|face.?track|speaker/i.test(name);
-
-  // Try to extract virality score and title
-  // Pattern 1: "85_Title here" or "85 - Title here" or "85 Title here"
-  const scoreMatch = name.match(
-    /^(?:clip[_\s-]*)?(\d{1,3})[_\s-]+(.+)/i
-  );
-
-  if (scoreMatch) {
-    const score = parseInt(scoreMatch[1], 10);
-    let title = scoreMatch[2]
-      .replace(/[_-]+/g, " ")
-      .replace(/(captions|subtitles|cc|facetrack|face.?track|speaker)/gi, "")
-      .trim();
-
-    return {
-      viralityScore: score <= 100 ? score : null,
-      title: title || null,
-      hasCaptions,
-      hasFaceTracking,
-      raw,
-    };
-  }
-
-  // No score found — use cleaned filename as title
-  const cleanTitle = name
-    .replace(/[_-]+/g, " ")
-    .replace(/(captions|subtitles|cc|facetrack|face.?track|speaker)/gi, "")
-    .trim();
-
-  return {
-    viralityScore: null,
-    title: cleanTitle || null,
-    hasCaptions,
-    hasFaceTracking,
-    raw,
+export interface OpusPostDetail {
+  title: string;
+  mediaType?: string;
+  custom?: {
+    description?: string;
+    privacy?: string;
   };
 }
 
-// --- Import from Google Drive ---
+export interface OpusScheduleResult {
+  scheduleId: string;
+}
 
-export interface ImportResult {
-  videoId: string;
+export interface OpusSocialCopyResult {
+  jobId: string;
+  title?: string;
+  description?: string;
+  hashtags?: string[];
+}
+
+export type ViralityTier = "hot" | "medium" | "filler";
+
+export interface ScheduledPostEntry {
   clipId: string;
-  contentId: string | null;
-  title: string;
-  status: "imported" | "ready" | "failed";
-  error?: string;
+  clipTitle: string;
+  platform: string;
+  accountName: string;
+  scheduledAt: string;
+  viralityRank: number;
+  viralityTier: ViralityTier;
+  scheduleId?: string;
 }
 
-/**
- * Import a single clip from Google Drive.
- * Downloads the file, uploads to Supabase Storage, creates DB records.
- */
-export async function importClipFromDrive(
-  driveFileId: string,
-  sourceVideoId?: string
-): Promise<ImportResult> {
-  // 1. Get file metadata from Drive
-  const meta = await getFileMetadata(driveFileId);
-  const filename = meta.name || "unknown_clip.mp4";
-  const mimeType = meta.mimeType || "video/mp4";
-  const sizeBytes = parseInt(meta.size || "0", 10);
-  const durationSeconds = meta.videoMediaMetadata?.durationMillis
-    ? Math.round(parseInt(meta.videoMediaMetadata.durationMillis as string, 10) / 1000)
-    : null;
-
-  // 2. Parse Opus Clip metadata from filename
-  const opusMeta = parseOpusClipExport(filename);
-
-  // 3. Download file from Drive
-  const buffer = await downloadFile(driveFileId);
-
-  // 4. Upload to Supabase Storage
-  return importClipFromBuffer(
-    buffer,
-    filename,
-    mimeType,
-    sizeBytes || buffer.length,
-    durationSeconds,
-    driveFileId,
-    opusMeta,
-    sourceVideoId
-  );
+export interface AutoScheduleResult {
+  projectId: string;
+  totalClips: number;
+  totalScheduled: number;
+  posts: ScheduledPostEntry[];
+  errors: string[];
 }
 
-/**
- * Import a single clip from a direct upload (Buffer).
- */
-export async function importClipFromUpload(
-  buffer: Buffer,
-  filename: string,
-  mimeType: string,
-  sourceVideoId?: string
-): Promise<ImportResult> {
-  const opusMeta = parseOpusClipExport(filename);
+// --- Base Fetch ---
 
-  return importClipFromBuffer(
-    buffer,
-    filename,
-    mimeType,
-    buffer.length,
-    null,
-    null,
-    opusMeta,
-    sourceVideoId
-  );
+const OPUS_API_BASE = "https://api.opus.pro";
+
+function getApiKey(): string {
+  const key = process.env.OPUS_CLIP_API_KEY;
+  if (!key) throw new Error("Missing OPUS_CLIP_API_KEY environment variable");
+  return key;
 }
 
-/**
- * Internal: shared import logic for both Drive and upload paths.
- */
-async function importClipFromBuffer(
-  buffer: Buffer,
-  filename: string,
-  mimeType: string,
-  sizeBytes: number,
-  durationSeconds: number | null,
-  driveFileId: string | null,
-  opusMeta: OpusClipMeta,
-  sourceVideoId?: string
-): Promise<ImportResult> {
-  const title = opusMeta.title || filename.replace(/\.[^.]+$/, "");
-  const sourceType: ImportSource = "opus_clip";
-  const now = new Date().toISOString();
+export async function opusFetch<T = unknown>(
+  path: string,
+  options: RequestInit = {}
+): Promise<T> {
+  const url = `${OPUS_API_BASE}${path}`;
+  const apiKey = getApiKey();
 
-  // Create video record first (status: importing)
-  const { data: video, error: videoErr } = await supabase
-    .from("videos")
-    .insert({
-      google_drive_file_id: driveFileId || `upload_${Date.now()}`,
-      filename,
-      mime_type: mimeType,
-      size_bytes: sizeBytes,
-      duration_seconds: durationSeconds,
-      status: "importing",
-      is_photo: false,
-      retry_count: 0,
-      source_type: sourceType,
-      source_video_id: sourceVideoId || null,
-      opus_clip_score: opusMeta.viralityScore,
-      opus_clip_metadata: {
-        title: opusMeta.title,
-        hasCaptions: opusMeta.hasCaptions,
-        hasFaceTracking: opusMeta.hasFaceTracking,
-        rawFilename: opusMeta.raw,
-      },
-      created_at: now,
-      updated_at: now,
-    })
-    .select("id")
-    .single();
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+      ...options.headers,
+    },
+  });
 
-  if (videoErr || !video) {
-    throw new Error(`Failed to create video record: ${videoErr?.message}`);
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(
+      `Opus Clip API error ${res.status} on ${path}: ${text.slice(0, 200)}`
+    );
   }
 
-  const videoId = video.id;
+  return res.json();
+}
 
-  try {
-    // Upload to Supabase Storage
-    const storagePath = `${videoId}/${filename}`;
-    const publicUrl = await uploadClip(storagePath, buffer, mimeType);
+// --- Social Accounts ---
 
-    // Update video with storage path and mark as imported
-    await supabase
-      .from("videos")
-      .update({
-        storage_path: storagePath,
-        status: "imported",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", videoId);
+export async function getSocialAccounts(): Promise<OpusSocialAccount[]> {
+  const res = await opusFetch<{ data: OpusSocialAccount[] }>(
+    "/api/social-accounts?q=mine"
+  );
+  return res.data || [];
+}
 
-    // Create clip record
-    const { data: clip, error: clipErr } = await supabase
-      .from("clips")
-      .insert({
-        video_id: videoId,
-        storage_path: storagePath,
-        start_time: 0,
-        end_time: durationSeconds || 0,
-        duration_seconds: durationSeconds || 0,
-        aspect_ratio: "9:16",
-        source_video_id: sourceVideoId || null,
-        opus_clip_score: opusMeta.viralityScore,
-        opus_clip_title: opusMeta.title,
-        has_captions: opusMeta.hasCaptions,
-        has_face_tracking: opusMeta.hasFaceTracking,
-        created_at: now,
-      })
-      .select("id")
-      .single();
+// --- Projects & Clips ---
 
-    if (clipErr || !clip) {
-      throw new Error(`Failed to create clip record: ${clipErr?.message}`);
+export async function getProjectClips(
+  projectId: string
+): Promise<OpusClipClip[]> {
+  const res = await opusFetch<{ data: RawClip[] }>(
+    `/api/exportable-clips?projectId=${encodeURIComponent(projectId)}`
+  );
+
+  const rawClips = res.data || [];
+
+  // Clips are returned sorted by Opus's internal quality ranking.
+  // First clip = best/most viral. We assign a computed viralityRank.
+  return rawClips.map((clip, index) => ({
+    id: clip.id,
+    projectId: clip.projectId,
+    title: clip.title || "",
+    description: clip.description || "",
+    text: clip.text || "",
+    hashtags: clip.hashtags || [],
+    keywords: clip.keywords || [],
+    genre: clip.genre,
+    subgenre: clip.subgenre,
+    durationMs: clip.durationMs || 0,
+    uriForPreview: clip.uriForPreview || "",
+    uriForExport: clip.uriForExport || "",
+    timeRanges: clip.timeRanges,
+    createdAt: clip.createdAt || "",
+    updatedAt: clip.updatedAt || "",
+    renderPref: clip.renderPref,
+    viralityRank: Math.max(10, 100 - index * 5),
+  }));
+}
+
+// Raw clip shape from the API (before we add viralityRank)
+interface RawClip {
+  id: string;
+  projectId: string;
+  title?: string;
+  description?: string;
+  text?: string;
+  hashtags?: string[];
+  keywords?: string[];
+  genre?: string;
+  subgenre?: string;
+  durationMs?: number;
+  uriForPreview?: string;
+  uriForExport?: string;
+  timeRanges?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+  renderPref?: unknown;
+}
+
+export async function getProjectDetails(
+  projectId: string
+): Promise<OpusClipProject> {
+  const res = await opusFetch<{ data: OpusClipProject }>(
+    `/api/clip-projects/${encodeURIComponent(projectId)}`
+  );
+  return res.data;
+}
+
+// --- Social Copy Generation ---
+
+export async function generateSocialCopy(
+  projectId: string,
+  clipId: string,
+  postAccountId: string,
+  subAccountId?: string
+): Promise<OpusSocialCopyResult> {
+  // Start the job
+  const startRes = await opusFetch<{ data: { jobId: string } }>(
+    "/api/social-copy-jobs",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId,
+        clipId,
+        postAccountId,
+        ...(subAccountId ? { subAccountId } : {}),
+      }),
+    }
+  );
+
+  const jobId = startRes.data.jobId;
+
+  // Poll until done (max 30 seconds)
+  const maxAttempts = 15;
+  for (let i = 0; i < maxAttempts; i++) {
+    await sleep(2000);
+
+    const pollRes = await opusFetch<{
+      data: {
+        status: string;
+        title?: string;
+        description?: string;
+        hashtags?: string[];
+      };
+    }>(`/api/social-copy-jobs/${jobId}`);
+
+    if (pollRes.data.status === "completed" || pollRes.data.status === "done") {
+      return {
+        jobId,
+        title: pollRes.data.title,
+        description: pollRes.data.description,
+        hashtags: pollRes.data.hashtags,
+      };
     }
 
-    return {
-      videoId,
-      clipId: clip.id,
-      contentId: null,
-      title,
-      status: "imported",
-    };
-  } catch (err) {
-    // Mark video as failed
-    await supabase
-      .from("videos")
-      .update({
-        status: "failed",
-        error_message: err instanceof Error ? err.message : String(err),
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", videoId);
-
-    return {
-      videoId,
-      clipId: "",
-      contentId: null,
-      title,
-      status: "failed",
-      error: err instanceof Error ? err.message : String(err),
-    };
+    if (pollRes.data.status === "failed" || pollRes.data.status === "error") {
+      throw new Error(`Social copy generation failed for job ${jobId}`);
+    }
   }
+
+  throw new Error(`Social copy generation timed out for job ${jobId}`);
 }
 
-// --- AI Copy Generation ---
+// --- Publishing ---
 
-/**
- * Generate platform-specific copy for an imported clip.
- * Creates a content record in 'review' status.
- */
-export async function generateCopyForClip(
-  clipId: string
-): Promise<string | null> {
-  // Fetch clip + video data
-  const { data: clip } = await supabase
-    .from("clips")
-    .select("*, videos(*)")
-    .eq("id", clipId)
-    .single();
+export async function publishNow(
+  projectId: string,
+  clipId: string,
+  postAccountId: string,
+  subAccountId: string | undefined,
+  postDetail: OpusPostDetail
+): Promise<void> {
+  await opusFetch("/api/post-tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      projectId,
+      clipId,
+      postAccountId,
+      ...(subAccountId ? { subAccountId } : {}),
+      postDetail,
+    }),
+  });
+}
 
-  if (!clip) throw new Error(`Clip not found: ${clipId}`);
+export async function schedulePost(
+  projectId: string,
+  clipId: string,
+  postAccountId: string,
+  subAccountId: string | undefined,
+  publishAt: string, // ISO 8601 UTC
+  postDetail: OpusPostDetail
+): Promise<OpusScheduleResult> {
+  const res = await opusFetch<{ data: { scheduleId: string } }>(
+    "/api/publish-schedules",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        projectId,
+        clipId,
+        postAccountId,
+        ...(subAccountId ? { subAccountId } : {}),
+        publishAt,
+        postDetail,
+      }),
+    }
+  );
 
-  const video = clip.videos;
-  const title =
-    clip.opus_clip_title ||
-    video?.filename?.replace(/\.[^.]+$/, "") ||
-    "Untitled Clip";
+  return { scheduleId: res.data.scheduleId };
+}
 
-  // Update video status to generating
-  if (video?.id) {
-    await supabase
-      .from("videos")
-      .update({ status: "generating", updated_at: new Date().toISOString() })
-      .eq("id", video.id);
+export async function cancelSchedule(scheduleId: string): Promise<void> {
+  await opusFetch(`/api/publish-schedules/${encodeURIComponent(scheduleId)}`, {
+    method: "DELETE",
+  });
+}
+
+// --- Virality Tier Classification ---
+
+export async function getViralityThresholds(): Promise<{
+  hot: number;
+  medium: number;
+}> {
+  const hot =
+    (await getAppSetting<number>("virality_hot_threshold")) ?? 80;
+  const medium =
+    (await getAppSetting<number>("virality_medium_threshold")) ?? 50;
+  return { hot, medium };
+}
+
+export function classifyViralityTier(
+  rank: number,
+  hotThreshold: number,
+  mediumThreshold: number
+): ViralityTier {
+  if (rank >= hotThreshold) return "hot";
+  if (rank >= mediumThreshold) return "medium";
+  return "filler";
+}
+
+// --- Schedule Time Calculation ---
+
+async function calculateScheduleTime(
+  tier: ViralityTier,
+  index: number,
+  platformCount: number
+): Promise<Date> {
+  const now = new Date();
+  const optimalTimes = await getOptimalPostingTimes();
+  const defaultHours = [11, 14, 18, 19];
+  const hours =
+    optimalTimes.length > 0
+      ? [...new Set(optimalTimes.map((t) => t.hour))].sort((a, b) => a - b)
+      : defaultHours;
+
+  // Offset within the day: spread across optimal time slots
+  const slotIndex = (index * platformCount) % hours.length;
+  const targetHour = hours[slotIndex] ?? 14;
+
+  let daysOut: number;
+
+  switch (tier) {
+    case "hot":
+      // Schedule within hours: today or tomorrow at the next optimal slot
+      daysOut = 0;
+      break;
+    case "medium":
+      // Schedule 1-3 days out, spread evenly
+      daysOut = 1 + (index % 3);
+      break;
+    case "filler":
+      // Spread across the rest of the month: 4+ days out
+      daysOut = 4 + index * 2;
+      break;
   }
 
-  try {
-    // Use transcript if available, otherwise use the title as context
-    const transcript = video?.transcript || title;
-    const platforms: Platform[] = [
-      "youtube",
-      "facebook",
-      "instagram",
-      "tiktok",
-    ];
-    const isShort =
-      clip.duration_seconds != null && clip.duration_seconds <= 60;
+  const scheduled = new Date(now);
+  scheduled.setDate(scheduled.getDate() + daysOut);
+  scheduled.setUTCHours(targetHour, 0, 0, 0);
 
-    const copy = await generatePlatformCopy(
-      transcript,
-      title,
-      platforms,
-      false, // isSpanish
-      undefined, // visualContext
-      isShort
+  // If the computed time is in the past, bump to next day
+  if (scheduled <= now) {
+    scheduled.setDate(scheduled.getDate() + 1);
+  }
+
+  return scheduled;
+}
+
+// --- Main Auto-Schedule Function ---
+
+export async function autoScheduleProject(
+  projectId: string
+): Promise<AutoScheduleResult> {
+  const errors: string[] = [];
+  const posts: ScheduledPostEntry[] = [];
+
+  // 1. Fetch all clips for the project (sorted by Opus quality)
+  const clips = await getProjectClips(projectId);
+  if (clips.length === 0) {
+    return {
+      projectId,
+      totalClips: 0,
+      totalScheduled: 0,
+      posts: [],
+      errors: ["No clips found for this project"],
+    };
+  }
+
+  // 2. Fetch connected social accounts
+  const accounts = await getSocialAccounts();
+
+  // 3. Filter accounts based on platform toggles from settings
+  const enabledPlatforms = await getEnabledPlatforms();
+  const filteredAccounts = accounts.filter((a) =>
+    enabledPlatforms.includes(a.platform.toLowerCase())
+  );
+
+  if (filteredAccounts.length === 0) {
+    return {
+      projectId,
+      totalClips: clips.length,
+      totalScheduled: 0,
+      posts: [],
+      errors: [
+        "No connected social accounts match enabled platforms. Check Opus Clip connections and platform settings.",
+      ],
+    };
+  }
+
+  // 4. Get virality thresholds
+  const { hot: hotThreshold, medium: mediumThreshold } =
+    await getViralityThresholds();
+
+  // 5. For each clip, calculate schedule time and post to each platform
+  for (let clipIndex = 0; clipIndex < clips.length; clipIndex++) {
+    const clip = clips[clipIndex];
+    const tier = classifyViralityTier(
+      clip.viralityRank,
+      hotThreshold,
+      mediumThreshold
     );
 
-    // Get clip's public URL for media_url
-    const { data: urlData } = supabase.storage
-      .from("clips")
-      .getPublicUrl(clip.storage_path);
+    const scheduleTime = await calculateScheduleTime(
+      tier,
+      clipIndex,
+      filteredAccounts.length
+    );
 
-    const now = new Date().toISOString();
+    for (const account of filteredAccounts) {
+      try {
+        // Stagger posts on different platforms by 30 minutes
+        const platformOffset = filteredAccounts.indexOf(account) * 30;
+        const adjustedTime = new Date(
+          scheduleTime.getTime() + platformOffset * 60 * 1000
+        );
 
-    // Determine initial status: fast-track hot clips to 'approved'
-    let initialStatus: "review" | "approved" = "review";
-    const autoApproveEnabled = await getAppSetting<boolean>("auto_approve_pipeline");
-    if (autoApproveEnabled && clip.opus_clip_score != null) {
-      const thresholdSetting = (await getAppSetting<number>("auto_approve_threshold")) ?? 7;
-      const minScore = thresholdSetting * 10; // 1-10 scale -> 0-100
-      if (clip.opus_clip_score >= minScore) {
-        initialStatus = "approved";
+        const postDetail: OpusPostDetail = {
+          title: clip.title || `Clip ${clipIndex + 1}`,
+          custom: {
+            description: clip.description || undefined,
+          },
+        };
+
+        const result = await schedulePost(
+          projectId,
+          clip.id,
+          account.postAccountId,
+          account.subAccountId,
+          adjustedTime.toISOString(),
+          postDetail
+        );
+
+        posts.push({
+          clipId: clip.id,
+          clipTitle: clip.title || `Clip ${clipIndex + 1}`,
+          platform: account.platform,
+          accountName: account.extUserName,
+          scheduledAt: adjustedTime.toISOString(),
+          viralityRank: clip.viralityRank,
+          viralityTier: tier,
+          scheduleId: result.scheduleId,
+        });
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : String(err);
+        errors.push(
+          `Failed to schedule clip "${clip.title}" on ${account.platform} (${account.extUserName}): ${msg}`
+        );
       }
     }
+  }
 
-    // Create content record
-    const { data: content, error: contentErr } = await supabase
-      .from("content")
-      .insert({
-        clip_id: clipId,
-        type: "video_clip",
-        status: initialStatus,
-        title: copy.youtube_title || title,
-        description: copy.youtube_description || null,
-        youtube_title: copy.youtube_title,
-        youtube_description: copy.youtube_description,
-        youtube_tags: copy.youtube_tags,
-        facebook_text: copy.facebook_text,
-        instagram_caption: copy.instagram_caption,
-        tiktok_caption: copy.tiktok_caption,
-        media_url: urlData?.publicUrl || null,
-        platforms,
-        created_at: now,
-        updated_at: now,
-      })
-      .select("id")
-      .single();
+  return {
+    projectId,
+    totalClips: clips.length,
+    totalScheduled: posts.length,
+    posts,
+    errors,
+  };
+}
 
-    if (contentErr || !content) {
-      throw new Error(
-        `Failed to create content record: ${contentErr?.message}`
-      );
-    }
+// --- Platform Enable/Disable ---
 
-    // Update video status to ready
-    if (video?.id) {
-      await supabase
-        .from("videos")
-        .update({ status: "ready", updated_at: new Date().toISOString() })
-        .eq("id", video.id);
-    }
+async function getEnabledPlatforms(): Promise<string[]> {
+  const setting = await getAppSetting<Record<string, boolean>>(
+    "opus_clip_platforms"
+  );
 
-    return content.id;
-  } catch (err) {
-    // Mark video as failed
-    if (video?.id) {
-      await supabase
-        .from("videos")
-        .update({
-          status: "failed",
-          error_message: err instanceof Error ? err.message : String(err),
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", video.id);
-    }
-    throw err;
+  if (!setting) {
+    // Default: all platforms enabled
+    return [
+      "youtube",
+      "tiktok_business",
+      "facebook_page",
+      "instagram_business",
+      "linkedin",
+      "twitter",
+    ];
+  }
+
+  return Object.entries(setting)
+    .filter(([, enabled]) => enabled)
+    .map(([platform]) => platform);
+}
+
+// --- Sync Projects ---
+
+/**
+ * Fetch recent project IDs that have been processed.
+ * Returns project IDs stored in app_settings.
+ */
+export async function getProcessedProjectIds(): Promise<string[]> {
+  const ids = await getAppSetting<string[]>("opus_clip_processed_projects");
+  return ids || [];
+}
+
+export async function markProjectProcessed(projectId: string): Promise<void> {
+  const { setAppSetting } = await import("./settings");
+  const existing = await getProcessedProjectIds();
+  if (!existing.includes(projectId)) {
+    // Keep last 100 project IDs
+    const updated = [...existing, projectId].slice(-100);
+    await setAppSetting("opus_clip_processed_projects", updated);
   }
 }
 
-// --- Batch Import ---
+// --- Helpers ---
 
-/**
- * Import multiple clips from Google Drive in sequence.
- * Returns results for each file.
- */
-export async function processImportBatch(
-  driveFileIds: string[],
-  sourceVideoId?: string
-): Promise<ImportResult[]> {
-  const results: ImportResult[] = [];
-
-  for (const fileId of driveFileIds) {
-    try {
-      const result = await importClipFromDrive(fileId, sourceVideoId);
-      results.push(result);
-
-      // If import succeeded, generate copy
-      if (result.status === "imported" && result.clipId) {
-        try {
-          const contentId = await generateCopyForClip(result.clipId);
-          result.contentId = contentId;
-          result.status = "ready";
-        } catch (err) {
-          console.error(
-            `Copy generation failed for clip ${result.clipId}:`,
-            err
-          );
-          // Import succeeded but copy gen failed — still usable
-        }
-      }
-    } catch (err) {
-      results.push({
-        videoId: "",
-        clipId: "",
-        contentId: null,
-        title: fileId,
-        status: "failed",
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  return results;
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

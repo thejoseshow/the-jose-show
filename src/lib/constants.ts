@@ -187,7 +187,7 @@ export const NAV_ITEMS = [
   { label: "Calendar", href: "/dashboard/calendar", icon: "calendar" },
   { label: "Events", href: "/dashboard/events", icon: "sparkles" },
   { label: "Templates", href: "/dashboard/templates", icon: "fileText" },
-  { label: "Import", href: "/dashboard/import", icon: "import" },
+  { label: "Schedule", href: "/dashboard/import", icon: "clock" },
   { label: "Analytics", href: "/dashboard/analytics", icon: "chart" },
   { label: "Settings", href: "/dashboard/settings", icon: "settings" },
 ] as const;
