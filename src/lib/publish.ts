@@ -43,6 +43,32 @@ export async function publishContent(
     throw new Error("Content not found or not in publishable status");
   }
 
+  // Wrap the entire publish pipeline in try/catch so we ALWAYS resolve the
+  // final status even when an unexpected error occurs.  Without this, an
+  // unhandled throw leaves the row stuck in "publishing" forever.
+  try {
+    return await _doPublish(contentId, content, platforms);
+  } catch (outerErr) {
+    // Safety net: revert to "approved" so the item can be retried later
+    console.error(`publishContent unexpected error for ${contentId}:`, outerErr);
+    await supabase
+      .from("content")
+      .update({ status: "approved", updated_at: new Date().toISOString() })
+      .eq("id", contentId);
+    throw outerErr;
+  }
+}
+
+/**
+ * Internal implementation — separated so the outer function can guarantee
+ * the status is always resolved (never left as "publishing").
+ */
+async function _doPublish(
+  contentId: string,
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  content: any,
+  platforms?: Platform[]
+): Promise<{ success: boolean; data: Record<string, { success: boolean; id?: string; error?: string }> }> {
   // SSRF protection: validate media URLs
   if (content.media_url && !validateMediaUrl(content.media_url)) {
     await supabase.from("content").update({ status: "approved" }).eq("id", contentId);
@@ -281,29 +307,56 @@ export async function publishContent(
   const attempted = Object.entries(results).filter(([, r]) => !r.skipped);
   const anyNewSuccess = attempted.some(([, r]) => r.success);
   const anyFailure = attempted.some(([, r]) => !r.success);
-  // "published" if all attempted platforms succeeded (skip disconnected platforms)
-  const allAttemptedSuccess = attempted.length > 0 && attempted.every(([, r]) => r.success);
-  const finalStatus = allAttemptedSuccess ? "published" : anyNewSuccess ? "partially_published" : "approved";
+
+  // Also count previously-succeeded platforms (skipped because they already have a post ID)
+  const previouslySucceeded = Object.entries(results).filter(
+    ([, r]) => r.skipped && r.success
+  );
+
+  // "published" if all attempted platforms succeeded OR if there were no platforms
+  // to attempt (all skipped) and at least some previously succeeded
+  const allAttemptedSuccess = attempted.length > 0
+    ? attempted.every(([, r]) => r.success)
+    : previouslySucceeded.length > 0;
+
+  // If every attempted platform failed and nothing previously succeeded, revert to "approved"
+  // so the cron can pick it up again. Otherwise mark as "published" or "partially_published".
+  let finalStatus: string;
+  if (allAttemptedSuccess) {
+    finalStatus = "published";
+  } else if (anyNewSuccess || previouslySucceeded.length > 0) {
+    // At least one platform has been published to — mark published
+    // (failed platforms are logged and can be retried manually)
+    finalStatus = "published";
+  } else {
+    // Everything failed, nothing previously succeeded — revert so it can be retried
+    finalStatus = "approved";
+  }
 
   await supabase
     .from("content")
     .update({
       status: finalStatus,
-      published_at: anyNewSuccess ? new Date().toISOString() : (content.published_at as string | null),
+      published_at: (anyNewSuccess || previouslySucceeded.length > 0)
+        ? new Date().toISOString()
+        : (content.published_at as string | null),
       updated_at: new Date().toISOString(),
     })
     .eq("id", contentId);
 
-  if (allAttemptedSuccess) {
+  if (finalStatus === "published") {
     const successPlatforms = Object.entries(results)
       .filter(([, r]) => r.success)
       .map(([p]) => p);
     await notifyPublishSuccess(content.title as string, successPlatforms).catch(console.error);
-  } else if (anyNewSuccess && anyFailure) {
+  }
+  if (anyFailure) {
     const failedPlatforms = attempted
       .filter(([, r]) => !r.success)
       .map(([p]) => p);
-    await notifyPublishPartialFailure(content.title as string, failedPlatforms).catch(console.error);
+    if (failedPlatforms.length > 0) {
+      await notifyPublishPartialFailure(content.title as string, failedPlatforms).catch(console.error);
+    }
   }
 
   return { success: true, data: results };

@@ -1,100 +1,89 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyCronSecret } from "@/lib/auth";
-import { listNewFiles } from "@/lib/google-drive";
-import { supabase } from "@/lib/supabase";
-import { processVideo, processPhoto } from "@/lib/pipeline";
-import { withCronLog } from "@/lib/cron-logger";
-import { MAX_VIDEO_SIZE_BYTES, MAX_PHOTO_SIZE_BYTES, PIPELINE_CONCURRENCY, LARGE_VIDEO_THRESHOLD_MB } from "@/lib/constants";
-import type { Video } from "@/lib/types";
+import { scanDriveForClips, importClip } from "@/lib/pipeline";
 
-export const maxDuration = 800;
+export const maxDuration = 300; // 5 min
 
+/**
+ * GET /api/cron/process-uploads
+ *
+ * Scans the Opus Clip Drive folder (configured via app_settings.opus_clip_drive_folder)
+ * for new clip files. Imports each through the pipeline and generates AI copy.
+ */
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   try {
-    const result = await withCronLog("process-uploads", async () => {
-      const newFiles = await listNewFiles();
-      let newRecords = 0;
+    // Scan for new clips in the Opus Clip Drive folder
+    const newClips = await scanDriveForClips();
 
-      for (const file of newFiles) {
-        const fileSize = parseInt(file.size, 10);
-        const sizeLimit = file.isPhoto ? MAX_PHOTO_SIZE_BYTES : MAX_VIDEO_SIZE_BYTES;
-        if (fileSize > sizeLimit) continue;
+    if (newClips.length === 0) {
+      return NextResponse.json({
+        success: true,
+        message: "No new clips found",
+        processed: 0,
+      });
+    }
 
-        const { error } = await supabase.from("videos").insert({
-          google_drive_file_id: file.id,
-          filename: file.name,
-          mime_type: file.mimeType,
-          size_bytes: fileSize,
-          is_photo: file.isPhoto,
-          status: "new",
+    console.log(`Found ${newClips.length} new clips to import`);
+
+    const results = [];
+    let imported = 0;
+    let failed = 0;
+
+    // Process clips sequentially to avoid overwhelming resources
+    for (const clip of newClips) {
+      try {
+        console.log(`Importing: ${clip.name} (${clip.id})`);
+
+        const result = await importClip({
+          driveFileId: clip.id,
+          generateCopy: true,
         });
-        if (!error) newRecords++;
-      }
 
-      const { data: pendingVideos } = await supabase
-        .from("videos")
-        .select("*")
-        .in("status", ["new", "downloaded", "transcribed"])
-        .order("created_at", { ascending: true })
-        .limit(3);
+        results.push({
+          filename: clip.name,
+          driveFileId: clip.id,
+          ...result,
+        });
 
-      let processed = 0;
-      const errors: string[] = [];
-
-      // Process videos in parallel batches (single concurrency for large files)
-      const pending = (pendingVideos || []) as Video[];
-      const hasLargeFile = pending.some((v) => v.size_bytes > LARGE_VIDEO_THRESHOLD_MB * 1024 * 1024);
-      const concurrency = hasLargeFile ? 1 : PIPELINE_CONCURRENCY;
-      for (let i = 0; i < pending.length; i += concurrency) {
-        const batch = pending.slice(i, i + concurrency);
-        const results = await Promise.allSettled(
-          batch.map((v) => (v.is_photo ? processPhoto(v) : processVideo(v)))
-        );
-        for (let j = 0; j < results.length; j++) {
-          if (results[j].status === "fulfilled") {
-            processed++;
-          } else {
-            const reason = (results[j] as PromiseRejectedResult).reason;
-            errors.push(`${batch[j].filename}: ${reason instanceof Error ? reason.message : "Unknown error"}`);
-          }
+        if (result.status === "failed") {
+          failed++;
+          console.error(`Failed to import ${clip.name}: ${result.error}`);
+        } else {
+          imported++;
+          console.log(`Imported ${clip.name} -> video ${result.videoId}`);
         }
+      } catch (err) {
+        failed++;
+        const errorMsg = err instanceof Error ? err.message : String(err);
+        console.error(`Error importing ${clip.name}:`, errorMsg);
+        results.push({
+          filename: clip.name,
+          driveFileId: clip.id,
+          status: "failed",
+          error: errorMsg,
+        });
       }
+    }
 
-      // Auto-archive failed videos older than 24 hours
-      const archiveCutoff = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-      const { data: archived } = await supabase
-        .from("videos")
-        .update({ status: "archived", updated_at: new Date().toISOString() })
-        .eq("status", "failed")
-        .lt("updated_at", archiveCutoff)
-        .select("id");
-
-      // Recover content stuck at "publishing" for more than 15 minutes
-      const stuckCutoff = new Date(Date.now() - 15 * 60 * 1000).toISOString();
-      const { data: stuckContent } = await supabase
-        .from("content")
-        .update({ status: "approved", updated_at: new Date().toISOString() })
-        .eq("status", "publishing")
-        .lt("updated_at", stuckCutoff)
-        .select("id");
-
-      return {
-        new_files_detected: newRecords,
-        processed,
-        archived: archived?.length || 0,
-        recovered_publishing: stuckContent?.length || 0,
-        errors: errors.length > 0 ? errors : undefined,
-      };
+    return NextResponse.json({
+      success: true,
+      message: `Processed ${newClips.length} clips: ${imported} imported, ${failed} failed`,
+      processed: imported,
+      failed,
+      results,
     });
-
-    return NextResponse.json({ success: true, ...result });
   } catch (err) {
+    console.error("process-uploads cron error:", err);
     return NextResponse.json(
-      { success: false, error: err instanceof Error ? err.message : "Unknown error" },
+      {
+        success: false,
+        error: err instanceof Error ? err.message : "Cron failed",
+        processed: 0,
+      },
       { status: 500 }
     );
   }

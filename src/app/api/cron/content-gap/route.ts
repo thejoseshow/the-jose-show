@@ -37,7 +37,7 @@ export async function GET(request: NextRequest) {
     const { data: pendingVideos } = await supabase
       .from("videos")
       .select("id")
-      .in("status", ["new", "downloaded", "transcribed"])
+      .in("status", ["new", "importing", "imported"])
       .limit(5);
 
     const queueCount = queuedContent?.length || 0;

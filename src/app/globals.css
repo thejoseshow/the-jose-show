@@ -146,6 +146,59 @@
   --sidebar-ring: oklch(0.577 0.245 27.325);
 }
 
+/* Glass-morphism effect */
+.glass {
+  background: rgba(255, 255, 255, 0.05);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Pulse animation for live indicators */
+@keyframes live-pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.5);
+  }
+}
+.animate-live-pulse {
+  animation: live-pulse 2s ease-in-out infinite;
+}
+
+/* Gradient card shimmer effect */
+@keyframes gradient-shift {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+.animate-gradient {
+  background-size: 200% 200%;
+  animation: gradient-shift 8s ease infinite;
+}
+
+/* Subtle glow effect for hover states */
+.glow-sm {
+  box-shadow: 0 0 15px -3px rgba(239, 68, 68, 0.15);
+}
+.glow-md {
+  box-shadow: 0 0 25px -5px rgba(239, 68, 68, 0.2);
+}
+
+/* Horizontal scrollbar (thin, matching theme) */
+::-webkit-scrollbar:horizontal {
+  height: 4px;
+}
+
 @layer base {
   * {
     @apply border-border outline-ring/50;

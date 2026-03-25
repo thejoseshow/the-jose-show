@@ -187,7 +187,30 @@ export const NAV_ITEMS = [
   { label: "Calendar", href: "/dashboard/calendar", icon: "calendar" },
   { label: "Events", href: "/dashboard/events", icon: "sparkles" },
   { label: "Templates", href: "/dashboard/templates", icon: "fileText" },
-  { label: "Uploads", href: "/dashboard/uploads", icon: "upload" },
+  { label: "Import", href: "/dashboard/import", icon: "import" },
   { label: "Analytics", href: "/dashboard/analytics", icon: "chart" },
   { label: "Settings", href: "/dashboard/settings", icon: "settings" },
 ] as const;
+
+// Map nav item labels to feature flags for white-label filtering
+import type { WhiteLabelConfig } from "./white-label";
+
+const NAV_FEATURE_MAP: Record<string, keyof WhiteLabelConfig["features"]> = {
+  Events: "events",
+  Templates: "templates",
+  Analytics: "analytics",
+};
+
+/**
+ * Filter NAV_ITEMS based on enabled features.
+ * Items without a feature mapping are always shown.
+ */
+export function getNavItems(
+  features: WhiteLabelConfig["features"]
+): typeof NAV_ITEMS[number][] {
+  return NAV_ITEMS.filter((item) => {
+    const featureKey = NAV_FEATURE_MAP[item.label];
+    if (!featureKey) return true; // always show if no feature flag
+    return features[featureKey];
+  });
+}

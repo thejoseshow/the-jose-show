@@ -1,10 +1,5 @@
 import type { NextConfig } from "next";
 
-const nextConfig: NextConfig = {
-  serverExternalPackages: ["ffmpeg-static"],
-  outputFileTracingIncludes: {
-    "/api/**": ["./node_modules/ffmpeg-static/ffmpeg"],
-  },
-};
+const nextConfig: NextConfig = {};
 
 export default nextConfig;

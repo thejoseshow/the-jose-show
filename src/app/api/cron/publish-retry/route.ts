@@ -6,7 +6,7 @@ import { withCronLog } from "@/lib/cron-logger";
 
 export const maxDuration = 800;
 
-// Retry partially published content — picks up items where some platforms failed
+// Retry partially published content and recover stuck "publishing" items
 export async function GET(request: NextRequest) {
   if (!verifyCronSecret(request)) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -14,7 +14,36 @@ export async function GET(request: NextRequest) {
 
   try {
     const result = await withCronLog("publish-retry", async () => {
-      // Find content that partially published (some platforms failed)
+      // 1. Recover stuck "publishing" items — if status has been "publishing"
+      //    for more than 10 minutes, something crashed. Revert to "approved"
+      //    so the next publish-scheduled run can pick them up.
+      const stuckThreshold = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+      const { data: stuckContent, error: stuckErr } = await supabase
+        .from("content")
+        .select("id, title")
+        .eq("status", "publishing")
+        .lt("updated_at", stuckThreshold)
+        .limit(10);
+
+      if (stuckErr) throw new Error(stuckErr.message);
+
+      let recovered = 0;
+      if (stuckContent?.length) {
+        for (const item of stuckContent) {
+          const { error: updateErr } = await supabase
+            .from("content")
+            .update({ status: "approved", updated_at: new Date().toISOString() })
+            .eq("id", item.id)
+            .eq("status", "publishing");
+
+          if (!updateErr) {
+            recovered++;
+            console.log(`Recovered stuck content: ${item.title} (${item.id})`);
+          }
+        }
+      }
+
+      // 2. Retry partially published content (some platforms failed)
       const { data: retryContent, error } = await supabase
         .from("content")
         .select("id, title, platforms")
@@ -23,7 +52,7 @@ export async function GET(request: NextRequest) {
         .limit(3);
 
       if (error) throw new Error(error.message);
-      if (!retryContent?.length) return { retried: 0 };
+      if (!retryContent?.length) return { retried: 0, recovered };
 
       let retried = 0;
       const errors: string[] = [];
@@ -37,7 +66,12 @@ export async function GET(request: NextRequest) {
         }
       }
 
-      return { retried, total: retryContent.length, errors: errors.length > 0 ? errors : undefined };
+      return {
+        retried,
+        recovered,
+        total: retryContent.length,
+        errors: errors.length > 0 ? errors : undefined,
+      };
     });
 
     return NextResponse.json({ success: true, ...result });

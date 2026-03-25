@@ -18,7 +18,7 @@ export async function GET(request: NextRequest) {
         supabase
           .from("videos")
           .select("id", { count: "exact", head: true })
-          .not("status", "in", '("clipped","failed")'),
+          .not("status", "in", '("ready","failed","archived")'),
         supabase
           .from("content")
           .select("id", { count: "exact", head: true })

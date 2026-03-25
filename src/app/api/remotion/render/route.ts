@@ -8,7 +8,7 @@ import {
   convertWordTimestampsToFrames,
   convertSegmentsToWords,
   parseSRTToSegments,
-} from "@/lib/caption-utils";
+} from "@/lib/caption-frames";
 import type { CompositionId, Clip } from "@/lib/types";
 
 // POST /api/remotion/render - Trigger a Remotion Lambda render

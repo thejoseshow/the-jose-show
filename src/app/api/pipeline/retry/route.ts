@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSession } from "@/lib/auth";
 import { supabase } from "@/lib/supabase";
 
-// POST /api/pipeline/retry - Reset a failed video for reprocessing
+// POST /api/pipeline/retry - Reset a failed video for re-import
 export async function POST(request: NextRequest) {
   const session = await getSession();
   if (!session?.authenticated) {
@@ -33,20 +33,11 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Determine the best stage to resume from based on existing data
-    let resetStatus: string;
-    if (video.transcript) {
-      resetStatus = "transcribed";
-    } else if (video.storage_path) {
-      resetStatus = "downloaded";
-    } else {
-      resetStatus = "new";
-    }
-
+    // Reset to 'new' so the next cron/manual trigger re-imports
     await supabase
       .from("videos")
       .update({
-        status: resetStatus,
+        status: "new",
         error_message: null,
         retry_count: 0,
         updated_at: new Date().toISOString(),
@@ -56,7 +47,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       video_id,
-      reset_to: resetStatus,
+      reset_to: "new",
     });
   } catch (err) {
     return NextResponse.json(

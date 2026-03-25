@@ -37,7 +37,7 @@ import {
   convertWordTimestampsToFrames,
   convertSegmentsToWords,
   parseSRTToSegments,
-} from "@/lib/caption-utils";
+} from "@/lib/caption-frames";
 import type { Content, ContentTemplate, Platform, PublishLog, RenderJob, Clip } from "@/lib/types";
 
 export default function ContentDetailPage({

@@ -22,7 +22,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
-import { Loader2, Trash2, HardDrive, Clock } from "lucide-react";
+import { Loader2, Trash2, HardDrive, Clock, Zap } from "lucide-react";
 
 interface StorageStats {
   total_files: number;
@@ -103,6 +103,10 @@ export default function SettingsPage() {
   });
   const [abTestingEnabled, setAbTestingEnabled] = useState(false);
   const [abTestDays, setAbTestDays] = useState(3);
+  const [viralityScheduling, setViralityScheduling] = useState(false);
+  const [hotThreshold, setHotThreshold] = useState(80);
+  const [mediumThreshold, setMediumThreshold] = useState(50);
+  const [maxPostsPerDay, setMaxPostsPerDay] = useState(3);
   const [autoApproveLoading, setAutoApproveLoading] = useState(true);
 
   const fetchConnections = useCallback(async () => {
@@ -149,6 +153,18 @@ export default function SettingsPage() {
             ? JSON.parse(data.data.preferred_post_times)
             : data.data.preferred_post_times;
           setPreferredTimes(parsed);
+        }
+        if (data.data?.auto_schedule_by_virality != null) {
+          setViralityScheduling(data.data.auto_schedule_by_virality === true || data.data.auto_schedule_by_virality === "true");
+        }
+        if (data.data?.virality_hot_threshold != null) {
+          setHotThreshold(Number(data.data.virality_hot_threshold) || 80);
+        }
+        if (data.data?.virality_medium_threshold != null) {
+          setMediumThreshold(Number(data.data.virality_medium_threshold) || 50);
+        }
+        if (data.data?.max_posts_per_day != null) {
+          setMaxPostsPerDay(Number(data.data.max_posts_per_day) || 3);
         }
       }
     } catch {
@@ -310,6 +326,67 @@ export default function SettingsPage() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ preferred_post_times: updated }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleViralitySchedulingToggle(checked: boolean) {
+    setViralityScheduling(checked);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_schedule_by_virality: checked }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        toast.success(checked ? "Virality scheduling enabled" : "Virality scheduling disabled");
+      } else {
+        setViralityScheduling(!checked);
+        toast.error(data.error || "Failed to update setting");
+      }
+    } catch {
+      setViralityScheduling(!checked);
+      toast.error("Failed to update setting");
+    }
+  }
+
+  async function handleHotThresholdChange(value: number) {
+    setHotThreshold(value);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ virality_hot_threshold: value }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleMediumThresholdChange(value: number) {
+    setMediumThreshold(value);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ virality_medium_threshold: value }),
+      });
+    } catch {
+      // Non-critical
+    }
+  }
+
+  async function handleMaxPostsPerDayChange(value: number) {
+    const clamped = Math.min(Math.max(value, 1), 10);
+    setMaxPostsPerDay(clamped);
+    try {
+      await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ max_posts_per_day: clamped }),
       });
     } catch {
       // Non-critical
@@ -633,6 +710,95 @@ export default function SettingsPage() {
                   <p className="text-xs text-muted-foreground">
                     After this many days, the system picks a winner based on engagement.
                   </p>
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Smart Scheduling */}
+          <Card>
+            <CardContent className="pt-5 space-y-5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-orange-400" />
+                  <div>
+                    <p className="text-sm font-medium">Smart Scheduling</p>
+                    <p className="text-xs text-muted-foreground">
+                      Auto-schedule clips by virality score from Opus Clip
+                    </p>
+                  </div>
+                </div>
+                {autoApproveLoading ? (
+                  <Skeleton className="h-5 w-10" />
+                ) : (
+                  <Switch checked={viralityScheduling} onCheckedChange={handleViralitySchedulingToggle} />
+                )}
+              </div>
+
+              {viralityScheduling && (
+                <>
+                  <Separator />
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">
+                        Hot Threshold: <span className="font-bold text-red-400">{hotThreshold}</span>
+                      </Label>
+                    </div>
+                    <input
+                      type="range"
+                      min={50}
+                      max={100}
+                      step={5}
+                      value={hotThreshold}
+                      onChange={(e) => handleHotThresholdChange(parseInt(e.target.value))}
+                      className="w-full accent-red-500"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Clips scoring {hotThreshold}+ publish within hours at the next optimal slot.
+                    </p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <Label className="text-sm">
+                        Medium Threshold: <span className="font-bold text-yellow-400">{mediumThreshold}</span>
+                      </Label>
+                    </div>
+                    <input
+                      type="range"
+                      min={10}
+                      max={hotThreshold - 1}
+                      step={5}
+                      value={mediumThreshold}
+                      onChange={(e) => handleMediumThresholdChange(parseInt(e.target.value))}
+                      className="w-full accent-yellow-500"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Clips scoring {mediumThreshold}-{hotThreshold - 1} schedule within 1-3 days. Below {mediumThreshold} fills calendar gaps.
+                    </p>
+                  </div>
+
+                  <Separator />
+
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <Label className="text-sm">Max Posts Per Day</Label>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Cap on total scheduled posts across all platforms per day
+                      </p>
+                    </div>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={10}
+                      value={maxPostsPerDay}
+                      onChange={(e) => handleMaxPostsPerDayChange(parseInt(e.target.value) || 3)}
+                      className="w-20 text-center"
+                    />
+                  </div>
                 </>
               )}
             </CardContent>

@@ -6,14 +6,27 @@
 
 export type VideoStatus =
   | "new"
-  | "downloading"
-  | "downloaded"
-  | "transcribing"
-  | "transcribed"
-  | "clipping"
-  | "clipped"
+  | "importing"
+  | "imported"
+  | "generating"
+  | "ready"
   | "failed"
   | "archived";
+
+export type ImportSource = "opus_clip" | "manual_upload" | "drive_import";
+
+export interface SourceVideo {
+  id: string;
+  title: string | null;
+  source_type: "phone" | "ecamm" | "livestream" | "other";
+  google_drive_file_id: string | null;
+  filename: string | null;
+  duration_seconds: number | null;
+  storage_url: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 export type ContentStatus =
   | "draft"
@@ -51,6 +64,11 @@ export interface Video {
   status: VideoStatus;
   error_message: string | null;
   retry_count: number;
+  // Opus Clip fields
+  source_video_id: string | null;
+  source_type: ImportSource | null;
+  opus_clip_score: number | null;
+  opus_clip_metadata: Record<string, unknown> | null;
   created_at: string;
   updated_at: string;
 }
@@ -80,6 +98,12 @@ export interface Clip {
   word_timestamps: WordTimestamp[] | null;
   ai_score: number | null;
   ai_reasoning: string | null;
+  // Opus Clip fields
+  source_video_id: string | null;
+  opus_clip_score: number | null;
+  opus_clip_title: string | null;
+  has_captions: boolean;
+  has_face_tracking: boolean;
   created_at: string;
 }
 

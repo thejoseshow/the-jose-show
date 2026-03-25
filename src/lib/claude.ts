@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { BRAND_VOICE, HASHTAG_SETS, PLATFORM_LIMITS, YOUTUBE_SOCIAL_LINKS, YOUTUBE_SUBSCRIBE_CTA, YOUTUBE_HASHTAGS } from "./constants";
-import type { TranscriptSegment, Platform } from "./types";
+import type { Platform } from "./types";
 
 let _client: Anthropic | null = null;
 function getClient() {
@@ -41,55 +41,6 @@ PLATFORMS:
 - TikTok (@thejoseshow_): Short viral clips under 60s, trending sounds/formats
 
 Always write in Jose's authentic voice. Be energetic, warm, and proud of Dominican culture.`;
-
-/**
- * Analyze video frames visually to understand what's happening in the video.
- * Returns a scene description that supplements the transcript.
- */
-export async function analyzeVideoFrames(
-  frames: Buffer[],
-  transcript: string
-): Promise<string> {
-  if (frames.length === 0) return "";
-
-  const client = getClient();
-
-  const imageContent = frames.map((frame) => ({
-    type: "image" as const,
-    source: {
-      type: "base64" as const,
-      media_type: "image/png" as const,
-      data: frame.toString("base64"),
-    },
-  }));
-
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 500,
-    messages: [
-      {
-        role: "user",
-        content: [
-          ...imageContent,
-          {
-            type: "text" as const,
-            text: `These are frames from a video by Jose (Dominican dancer/entertainer). The audio transcript is: "${transcript.slice(0, 500)}"
-
-Describe what's VISUALLY happening in these frames in 2-3 sentences. Focus on:
-- What is Jose doing? (dancing, talking, eating, at a bar, teaching, DJing, etc.)
-- Where is he? (studio, club, restaurant, outdoor, home, etc.)
-- Who else is in the scene? (alone, with wife, with students, crowd, etc.)
-- What's the vibe? (casual, energetic, romantic, fun, etc.)
-
-Be specific and factual about what you SEE.`,
-          },
-        ],
-      },
-    ],
-  });
-
-  return response.content.find((b) => b.type === "text")?.text || "";
-}
 
 /**
  * Analyze a photo visually with Claude and return a title + scene description.
@@ -153,87 +104,6 @@ Respond ONLY with JSON:
     };
   } catch {
     return { title: "New photo from Jose", visualContext: "" };
-  }
-}
-
-export interface ClipRecommendation {
-  start_time: number;
-  end_time: number;
-  score: number;
-  reasoning: string;
-  suggested_title: string;
-  platforms: Platform[];
-}
-
-/**
- * Analyze a transcript and recommend the best clip moments.
- * Returns ranked clip recommendations with timestamps.
- */
-export async function analyzeTranscriptForClips(
-  transcript: string,
-  segments: TranscriptSegment[],
-  videoDuration: number,
-  visualContext?: string
-): Promise<ClipRecommendation[]> {
-  const client = getClient();
-
-  const response = await client.messages.create({
-    model: MODEL,
-    max_tokens: 2048,
-    system: BRAND_SYSTEM_PROMPT,
-    messages: [
-      {
-        role: "user",
-        content: `Analyze this video transcript and find the best moments for short-form clips (30-60 seconds for TikTok/Instagram/Facebook, and the best longer segment up to 8 minutes for YouTube).
-
-VIDEO DURATION: ${videoDuration} seconds
-${visualContext ? `\nVISUAL CONTEXT (what's happening in the video): ${visualContext}\nIMPORTANT: Use this visual context to create accurate titles. If Jose is at a bar with his wife, title it about that — NOT about whatever song is playing in the background.\n` : ""}
-TRANSCRIPT WITH TIMESTAMPS:
-${segments.map((s) => `[${formatTime(s.start)} - ${formatTime(s.end)}] ${s.text}`).join("\n")}
-
-IMPORTANT - DETECT CONTENT TYPE:
-- If the transcript is mostly song lyrics (romantic Spanish, bachata/merengue lyrics), this is a DANCE VIDEO. Jose is dancing/practicing footwork, NOT singing. Title clips about the DANCING and FOOTWORK, not the song lyrics.
-- If Jose is speaking/talking, this is a vlog, teaching, or podcast clip. Title based on what he's saying.
-- If it's a mix, identify which parts are music vs speech.
-
-For short videos (under 90 seconds), recommend 1-3 clips that cover the best moments. For longer videos, find 3-5 clips.
-
-For each clip, provide:
-1. Start and end timestamps (in seconds)
-2. A score from 1-10 (10 = most engaging)
-3. Why this moment is engaging (what Jose is DOING, not song lyrics)
-4. A catchy title about the ACTIVITY (dancing, footwork, vibes, teaching, etc.)
-5. Which platforms it's best for
-
-PLATFORM RULES:
-- Short clips (under 60s): include "tiktok", "instagram", "facebook"
-- ALL clips should also include "youtube" — short clips become YouTube Shorts, longer clips become regular YouTube videos
-- For videos over 5 minutes, recommend at least one longer YouTube clip (up to 8 min) with platforms ["youtube", "facebook"]
-
-Respond ONLY with a JSON array. Example:
-[{"start_time": 0.0, "end_time": 40.0, "score": 9, "reasoning": "Jose's footwork is clean, great energy", "suggested_title": "Working on my Dominican footwork 🔥", "platforms": ["youtube", "tiktok", "instagram", "facebook"]}]
-
-Prioritize moments with:
-- Impressive footwork or dance moves
-- High energy or smooth transitions
-- Teaching moments or technique demos
-- Funny or surprising moments
-- Cultural insights or stories
-- Quotable lines (when Jose is actually talking)`,
-      },
-    ],
-  });
-
-  const text = response.content.find((b) => b.type === "text")?.text || "[]";
-  // Extract JSON from response (handle markdown code blocks)
-  const jsonMatch = text.match(/\[[\s\S]*\]/);
-  if (!jsonMatch) return [];
-
-  try {
-    return JSON.parse(jsonMatch[0]) as ClipRecommendation[];
-  } catch {
-    console.error("Failed to parse clip recommendations:", text);
-    return [];
   }
 }
 
@@ -721,12 +591,6 @@ Respond ONLY with JSON:
     generatePlatformCopy(clipTranscript, suggestedTitle, platforms, isSpanish, visualContext, isShort, learningContext),
   ]);
   return { variantA, variantB };
-}
-
-function formatTime(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 function getDefaultCopy(title: string, platforms: Platform[]): PlatformCopy {
